@@ -83,17 +83,26 @@ async def traces_list(request, datasette):
     if denied:
         return denied
     db = datasette.get_database(store.db_name(datasette))
+    # Per OTel semconv the root span is *named* after the low-cardinality
+    # route pattern; the concrete path lives in its url.path attribute. Show
+    # "<method> <path>", keep the pattern as the tooltip. Display-time
+    # lookup rather than promoting the two fields into the derived traces
+    # table: root_span_id is a primary-key probe into spans, and the v1
+    # schema contract stays untouched.
     result = await db.execute(
         """
-        select trace_id, name, service_name, span_count, error_count,
-               duration_ms, start_ns
-        from traces order by start_ns desc limit 100
+        select t.trace_id, t.name, t.service_name, t.span_count,
+               t.error_count, t.duration_ms, t.start_ns,
+               json_extract(r.attributes, '$."url.path"') as url_path,
+               json_extract(r.attributes, '$."http.request.method"')
+                 as http_method
+        from traces t
+        left join spans r on r.span_id = t.root_span_id
+        order by t.start_ns desc limit 100
         """
     )
     rows = []
-    services = set()
     for r in result.rows:
-        services.add(r["service_name"])
         started = datetime.fromtimestamp(
             (r["start_ns"] or 0) / 1e9, tz=timezone.utc
         ).strftime("%Y-%m-%d %H:%M:%S")
@@ -102,10 +111,18 @@ async def traces_list(request, datasette):
             if r["error_count"]
             else "0"
         )
+        route_name = r["name"] or "(no root span)"
+        if r["url_path"]:
+            label = f"{r['http_method'] or ''} {r['url_path']}".strip()
+        else:
+            # Non-HTTP roots and ingested foreign spans: the span name is
+            # the best label there is.
+            label = route_name
         rows.append(
             "<tr>"
-            f"<td><a href='/-/traces/{html.escape(r['trace_id'])}'>"
-            f"{html.escape(r['name'] or '(no root span)')}</a></td>"
+            f"<td><a href='/-/traces/{html.escape(r['trace_id'])}'"
+            f" title='{html.escape(route_name)}'>"
+            f"{html.escape(label)}</a></td>"
             f"<td>{html.escape(r['service_name'] or '')}</td>"
             f"<td>{r['span_count']}</td>"
             f"<td>{errors}</td>"
@@ -197,7 +214,22 @@ async def trace_view(request, datasette):
         else ""
     )
     root = next((s for s in spans if s["parent_span_id"] is None), spans[0])
-    title = root["name"]
+    # Same semconv split as the list: title is "<method> <url.path>" when
+    # the root is an HTTP span, with the route-pattern name demoted to a
+    # muted line; otherwise the span name stands.
+    root_attrs = json.loads(root["attributes"] or "{}")
+    url_path = root_attrs.get("url.path")
+    method = root_attrs.get("http.request.method")
+    title = (
+        " ".join(part for part in (method, url_path) if part)
+        if url_path
+        else root["name"]
+    )
+    route_line = (
+        f"<p class='muted'>route: <code>{html.escape(root['name'])}</code></p>"
+        if url_path
+        else ""
+    )
     service = root.get("service_name")
     service_line = (
         f"<p class='muted'>service: <code>{html.escape(service)}</code></p>"
@@ -208,6 +240,7 @@ async def trace_view(request, datasette):
         f"<p><a href='/-/traces'>&larr; all traces</a> &middot; "
         f"{len(spans)} spans &middot; {total_ns / 1e6:.1f} ms &middot; "
         f"<span class='muted'>{html.escape(trace_id)}</span></p>"
+        f"{route_line}"
         f"{service_line}"
         f"{truncated}<div class='waterfall'>{''.join(rows)}</div>"
     )

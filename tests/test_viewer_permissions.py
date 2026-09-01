@@ -44,6 +44,44 @@ async def test_self_stored_trace_round_trips(make_ds):
 
 
 @pytest.mark.asyncio
+async def test_http_roots_show_path_not_route_pattern(make_ds):
+    """Root spans are named after the low-cardinality route *pattern*
+    (semconv); the UI shows the concrete "<method> <url.path>" instead,
+    keeping the pattern as the tooltip (list) / route: line (waterfall)."""
+    import re
+
+    ds = await make_ds(public_viewer=True)
+    await ds.client.get("/-/versions.json")
+    await drain()
+
+    listing = await ds.client.get("/-/traces")
+    # The concrete path is the link label...
+    assert "GET /-/versions.json" in listing.text
+    # ...and the route-pattern span name survives as the title tooltip.
+    match = re.search(r"title='(GET [^']*)'", listing.text)
+    assert match, listing.text
+    route_pattern = match.group(1)
+    assert route_pattern != "GET /-/versions.json"
+
+    trace_id = re.search(r"/-/traces/([0-9a-f]{32})", listing.text).group(1)
+    waterfall = await ds.client.get(f"/-/traces/{trace_id}")
+    assert "<title>GET /-/versions.json</title>" in waterfall.text
+    assert "route: <code>" in waterfall.text
+
+
+@pytest.mark.asyncio
+async def test_non_http_roots_fall_back_to_span_name(make_ds):
+    "Ingested foreign spans without url.path keep their name as the label."
+    ds = await make_ds(ingest_token="s3cret", public_viewer=True)
+    await seed(ds)
+    listing = await ds.client.get("/-/traces")
+    assert ">remote-span</a>" in listing.text
+    waterfall = await ds.client.get(f"/-/traces/{TRACE_ID.hex()}")
+    assert "<title>remote-span</title>" in waterfall.text
+    assert "route: <code>" not in waterfall.text
+
+
+@pytest.mark.asyncio
 async def test_viewer_private_by_default(make_ds):
     ds = await make_ds(ingest_token="s3cret")
     await seed(ds)
