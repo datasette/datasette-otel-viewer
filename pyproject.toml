@@ -1,0 +1,38 @@
+[project]
+name = "datasette-otel-receiver"
+version = "0.1.0a0"
+description = "Store, receive and browse OpenTelemetry traces in Datasette"
+readme = "README.md"
+authors = [{name = "Alex Garcia"}]
+license = "Apache-2.0"
+classifiers=[
+    "Framework :: Datasette"
+]
+requires-python = ">=3.10"
+dependencies = [
+    "datasette>=1a37",
+    "opentelemetry-sdk>=1.37",
+    "opentelemetry-proto>=1.37",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project.urls]
+Homepage = "https://github.com/datasette/datasette-otel-receiver"
+Changelog = "https://github.com/datasette/datasette-otel-receiver/releases"
+Issues = "https://github.com/datasette/datasette-otel-receiver/issues"
+
+[project.entry-points.datasette]
+otel_receiver = "datasette_otel_receiver"
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.setuptools.packages.find]
+include = ["datasette_otel_receiver*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
