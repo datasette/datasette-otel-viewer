@@ -98,7 +98,7 @@ Consequences:
 ## Development
 
 ```bash
-just test           # against an editable ~/projects/datasette otel branch
+just test           # datasette from the otel branch via the uv source override
 just demo           # self mode on :8003 (--root; open /-/traces)
 just demo-receiver  # two-instance story, terminal 1
 just demo-sender    # terminal 2: datasette-otel-otlp exporting to terminal 1

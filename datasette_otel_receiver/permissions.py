@@ -51,7 +51,7 @@ them; see ``datasette-places``/``datasette-paper`` for the same split):
     database is untouched.
 
 Divergences from the ticket text (ticket 05 was written against
-``~/projects/datasette`` branch ``asg017/otel-phase1-3-remove-tracer``; per
+the ``asg017/otel-phase1-3-remove-tracer`` branch of simonw/datasette; per
 the ground truth for this implementation, the installed
 ``datasette==1.0a37`` from PyPI wins wherever the two differ -- ticket 04
 already documented such a split):
