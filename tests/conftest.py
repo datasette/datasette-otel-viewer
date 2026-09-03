@@ -12,6 +12,8 @@ Requires the editable datasette checkout on an otel branch (run via
 """
 
 import asyncio
+import json
+import re
 import sqlite3
 
 import pytest
@@ -63,8 +65,21 @@ async def make_ds(tmp_path):
 
         plugin_config.setdefault("db_path", str(tmp_path / "otel.db"))
         ds = Datasette(
-            [], memory=True,
-            config={"plugins": {"datasette-otel-receiver": plugin_config}},
+            [],
+            memory=True,
+            config={
+                "plugins": {
+                    "datasette-otel-receiver": plugin_config,
+                    # Vite dev mode: page routes emit dev-server script tags
+                    # instead of resolving the built manifest, so the suite
+                    # runs without `just frontend`.
+                    "datasette-vite": {
+                        "dev_paths": {
+                            "datasette_otel_receiver": "http://localhost:5186/"
+                        }
+                    },
+                }
+            },
         )
         await ds.invoke_startup()
         made.append(ds)
@@ -81,6 +96,17 @@ async def drain(exporter=None):
     futures, exporter.futures = list(exporter.futures), []
     for future in futures:
         await asyncio.wrap_future(future)
+
+
+def page_data(html):
+    "The JSON blob the base template embeds for the Svelte page."
+    match = re.search(
+        r'<script type="application/json" id="pageData">(.*?)</script>',
+        html,
+        re.DOTALL,
+    )
+    assert match, "no #pageData script in response"
+    return json.loads(match.group(1))
 
 
 def raw_span_rows(db_path):

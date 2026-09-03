@@ -1,0 +1,64 @@
+"""HTML page routes. Each renders the single base template with a Vite
+entrypoint and a Pydantic page-data blob; the Svelte page mounts into
+``#app-root`` and reads the blob (see frontend/src/page_data/load.ts)."""
+
+from datasette import Response
+
+from .. import queries, store
+from ..page_data import (
+    DEFAULT_LIMIT,
+    TraceDetailPageData,
+    TracesListPageData,
+    TracesQuery,
+)
+from ..router import check_viewer, router
+
+TEMPLATE = "otel_receiver_base.html"
+
+
+async def _render(datasette, request, *, title, entrypoint, page_data):
+    return Response.html(
+        await datasette.render_template(
+            TEMPLATE,
+            {
+                "page_title": title,
+                "entrypoint": entrypoint,
+                "page_data": page_data.model_dump(),
+            },
+            request=request,
+        )
+    )
+
+
+@router.GET(r"^/-/traces$")
+@check_viewer()
+async def traces_list_page(datasette, request):
+    page_data = TracesListPageData(
+        traces=await queries.list_traces(datasette, TracesQuery(limit=DEFAULT_LIMIT)),
+        services=await queries.list_services(datasette),
+        limit=DEFAULT_LIMIT,
+        database=store.db_name(datasette),
+    )
+    return await _render(
+        datasette,
+        request,
+        title="Traces",
+        entrypoint="src/pages/traces_list/index.ts",
+        page_data=page_data,
+    )
+
+
+@router.GET(r"^/-/traces/(?P<trace_id>[0-9a-f]{32})$")
+@check_viewer()
+async def trace_detail_page(datasette, request, trace_id: str):
+    detail = await queries.get_trace(datasette, trace_id)
+    if detail is None:
+        return Response.text("No spans with this trace_id", status=404)
+    page_data = TraceDetailPageData(**detail.model_dump())
+    return await _render(
+        datasette,
+        request,
+        title=detail.title,
+        entrypoint="src/pages/trace_detail/index.ts",
+        page_data=page_data,
+    )

@@ -95,13 +95,37 @@ Consequences:
   event loop; on older embedder lifecycles inserts are dropped with a warning
   rather than crashing.
 
+## Viewer
+
+![Traces list](docs/screenshots/traces.png)
+
+![Trace waterfall with the span inspector open](docs/screenshots/trace.png)
+
+The pages are Svelte 5 + TypeScript, built with Vite and served through
+[datasette-vite]. Both are backed by a JSON API with the same shapes:
+
+- `POST /-/api/traces/list` with `{"limit": 100, "service": "flask-app"}`
+- `GET /-/api/traces/<trace_id>`
+
+Gated exactly like the pages (`otel-view`, or `public_viewer: true`).
+
 ## Development
 
 ```bash
+uv sync && npm install --prefix frontend
+just types          # Python → TypeScript (OpenAPI + page-data schemas)
+just frontend       # build the bundle into the package
 just test           # datasette from the otel branch via the uv source override
+just dev            # self mode on :8012 (--root; open /-/traces)
 just demo           # self mode on :8003 (--root; open /-/traces)
 just demo-receiver  # two-instance story, terminal 1
 just demo-sender    # terminal 2: datasette-otel-otlp exporting to terminal 1
+just shots          # regenerate docs/screenshots/*.png (used above)
 ```
+
+Hot reload: `just frontend-dev` in one terminal and `just dev-with-hmr` in
+another. `CLAUDE.md` has the code map and the type-generation pipelines.
+
+[datasette-vite]: https://github.com/datasette/datasette-vite
 
 [datasette-otel-otlp]: https://github.com/datasette/datasette-otel-otlp

@@ -1,0 +1,60 @@
+name: Test
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: extractions/setup-just@v3
+      - uses: actions/setup-node@v6
+        with:
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend deps
+        run: npm ci --prefix frontend
+      - name: Build frontend bundle
+        run: just frontend
+      - name: Format check
+        run: just format-backend-check
+      - name: Lint
+        run: just check-backend
+      - name: Backend tests
+        run: just test
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - uses: extractions/setup-just@v3
+      - uses: actions/setup-node@v6
+        with:
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend deps
+        run: npm ci --prefix frontend
+      - name: Generate types from Python
+        run: |
+          uv sync
+          just types
+      - name: Type-check
+        run: just check-frontend
+      - name: Format check
+        run: just format-frontend-check
+      - name: Frontend tests
+        run: just test-frontend
+      - name: Build frontend bundle
+        run: just frontend

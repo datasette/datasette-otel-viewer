@@ -34,7 +34,8 @@ import json
 import sys
 import threading
 
-from opentelemetry import context as otel_context, trace
+from opentelemetry import context as otel_context
+from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
@@ -58,8 +59,14 @@ class SuppressingSampler(Sampler):
     "Drop any span started while store.SUPPRESS_KEY is set in its context."
 
     def should_sample(
-        self, parent_context, trace_id, name, kind=None, attributes=None,
-        links=None, trace_state=None,
+        self,
+        parent_context,
+        trace_id,
+        name,
+        kind=None,
+        attributes=None,
+        links=None,
+        trace_state=None,
     ):
         if otel_context.get_value(store.SUPPRESS_KEY, context=parent_context):
             return SamplingResult(Decision.DROP)
@@ -194,9 +201,7 @@ def install():
     "Runs at module import; re-runnable by tests after resetting otel globals."
     _state.clear()
     existing = trace.get_tracer_provider()
-    if not isinstance(
-        existing, (trace.ProxyTracerProvider, trace.NoOpTracerProvider)
-    ):
+    if not isinstance(existing, (trace.ProxyTracerProvider, trace.NoOpTracerProvider)):
         _state.update(mode="foreign", provider=existing, exporter=None)
         return
 
@@ -204,14 +209,10 @@ def install():
     resource = Resource.create({"service.name": "datasette"})
     provider = TracerProvider(sampler=SuppressingSampler(), resource=resource)
     provider.add_span_processor(
-        BatchSpanProcessor(
-            exporter, schedule_delay_millis=SCHEDULE_DELAY_MILLIS
-        )
+        BatchSpanProcessor(exporter, schedule_delay_millis=SCHEDULE_DELAY_MILLIS)
     )
     trace.set_tracer_provider(provider)
-    _state.update(
-        mode="owner", provider=provider, exporter=exporter, resource=resource
-    )
+    _state.update(mode="owner", provider=provider, exporter=exporter, resource=resource)
 
 
 def configure(datasette, loop):

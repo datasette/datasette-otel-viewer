@@ -11,8 +11,11 @@ classifiers=[
 requires-python = ">=3.10"
 dependencies = [
     "datasette>=1a37",
+    "datasette-plugin-router>=0.0.1a4",
+    "datasette-vite>=0.0.1a4",
     "opentelemetry-sdk>=1.37",
     "opentelemetry-proto>=1.37",
+    "pydantic>=2",
 ]
 
 [build-system]
@@ -28,10 +31,14 @@ Issues = "https://github.com/datasette/datasette-otel-receiver/issues"
 otel_receiver = "datasette_otel_receiver"
 
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio"]
+dev = ["pytest", "pytest-asyncio", "ruff>=0.15.0"]
 
 [tool.setuptools.packages.find]
 include = ["datasette_otel_receiver*"]
+exclude = ["frontend*"]
+
+[tool.setuptools.package-data]
+datasette_otel_receiver = ["static/**/*", "templates/**/*", "manifest.json"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"

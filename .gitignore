@@ -1,6 +1,18 @@
 __pycache__/
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
+.venv/
 otel.db*
 demo.db
 uv.lock
+
+# Frontend
+frontend/node_modules/
+frontend/src/page_data/*_schema.json
+frontend/src/page_data/*.types.ts
+frontend/api.d.ts
+
+# Generated static assets (rebuilt via `just frontend`)
+datasette_otel_receiver/static/gen/
+datasette_otel_receiver/manifest.json

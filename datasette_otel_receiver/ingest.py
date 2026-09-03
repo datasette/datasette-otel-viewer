@@ -110,9 +110,7 @@ async def traces_view(request, datasette):
         body = await _read_body(request)
         req = otlp.parse_body(body, content_type)
     except otlp.UnsupportedContentType:
-        return Response.text(
-            f"unsupported content-type: {content_type!r}", status=415
-        )
+        return Response.text(f"unsupported content-type: {content_type!r}", status=415)
     except otlp.DecodeError as exc:
         return Response.text(str(exc), status=400)
 

@@ -57,9 +57,7 @@ async def test_size_prune_keeps_newest_whole_traces(make_ds, tmp_path):
     rows = []
     for t in range(4):  # 4 traces x 2 spans, oldest first
         for s in range(2):
-            rows.append(
-                make_row(f"{t:02d}" * 16, f"{t}{s}" * 4, now_ns + t * 1000 + s)
-            )
+            rows.append(make_row(f"{t:02d}" * 16, f"{t}{s}" * 4, now_ns + t * 1000 + s))
     await store.insert_spans(ds, rows)
     await store.maybe_prune(ds, force=True)
     spans, traces = counts(tmp_path / "otel.db")

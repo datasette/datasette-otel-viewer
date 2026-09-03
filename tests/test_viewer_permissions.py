@@ -1,9 +1,8 @@
-"""Tickets 05 + 06: viewer pages render; private by default; public_viewer
-opens only the viewer."""
+"""Viewer pages and JSON API: render with typed page data; private by
+default; public_viewer opens only the viewer, never the raw tables."""
 
 import pytest
-
-from conftest import drain
+from conftest import drain, page_data
 from test_ingest import TRACE_ID, protobuf_body
 
 
@@ -25,12 +24,59 @@ async def test_viewer_list_and_waterfall(make_ds):
     await seed(ds)
     listing = await ds.client.get("/-/traces")
     assert listing.status_code == 200
-    assert TRACE_ID.hex() in listing.text
-    assert "flask-app" in listing.text
+    # The page is a Vite entrypoint plus an embedded page-data blob.
+    assert "src/pages/traces_list/index.ts" in listing.text
+    data = page_data(listing.text)
+    assert data["database"] == "otel"
+    assert data["limit"] == 100
+    assert "flask-app" in data["services"]
+    trace = next(t for t in data["traces"] if t["trace_id"] == TRACE_ID.hex())
+    assert trace["service_name"] == "flask-app"
+    assert trace["span_count"] >= 1
 
     waterfall = await ds.client.get(f"/-/traces/{TRACE_ID.hex()}")
     assert waterfall.status_code == 200
-    assert "remote-span" in waterfall.text
+    assert "src/pages/trace_detail/index.ts" in waterfall.text
+    detail = page_data(waterfall.text)
+    assert detail["trace_id"] == TRACE_ID.hex()
+    assert "remote-span" in {s["name"] for s in detail["spans"]}
+    # attributes/resource arrive JSON-decoded, ready for the inspector
+    assert all(isinstance(s["attributes"], dict) for s in detail["spans"])
+
+
+@pytest.mark.asyncio
+async def test_json_api_matches_page_data(make_ds):
+    ds = await make_ds(ingest_token="s3cret", public_viewer=True)
+    await seed(ds)
+    listed = await ds.client.post("/-/api/traces/list", json={"limit": 10})
+    assert listed.status_code == 200
+    rows = listed.json()["traces"]
+    assert [t["trace_id"] for t in rows] == [
+        t["trace_id"]
+        for t in page_data((await ds.client.get("/-/traces")).text)["traces"]
+    ]
+
+    detail = await ds.client.get(f"/-/api/traces/{TRACE_ID.hex()}")
+    assert detail.status_code == 200
+    assert detail.json() == page_data(
+        (await ds.client.get(f"/-/traces/{TRACE_ID.hex()}")).text
+    )
+
+
+@pytest.mark.asyncio
+async def test_json_api_filters_and_validates(make_ds):
+    ds = await make_ds(ingest_token="s3cret", public_viewer=True)
+    await seed(ds)
+    hit = await ds.client.post("/-/api/traces/list", json={"service": "flask-app"})
+    assert [t["trace_id"] for t in hit.json()["traces"]] == [TRACE_ID.hex()]
+    miss = await ds.client.post("/-/api/traces/list", json={"service": "nope"})
+    assert miss.json() == {"traces": []}
+    # Pydantic validation: limit is capped, malformed bodies are 400s.
+    too_big = await ds.client.post("/-/api/traces/list", json={"limit": 10_000})
+    assert too_big.status_code == 400
+    assert "limit" in too_big.json()["error"]
+    missing = await ds.client.get("/-/api/traces/" + "0" * 32)
+    assert missing.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -40,33 +86,29 @@ async def test_self_stored_trace_round_trips(make_ds):
     await drain()
     listing = await ds.client.get("/-/traces")
     assert listing.status_code == 200
-    assert "GET " in listing.text
+    labels = [t["label"] for t in page_data(listing.text)["traces"]]
+    assert any(label.startswith("GET ") for label in labels)
 
 
 @pytest.mark.asyncio
 async def test_http_roots_show_path_not_route_pattern(make_ds):
     """Root spans are named after the low-cardinality route *pattern*
     (semconv); the UI shows the concrete "<method> <url.path>" instead,
-    keeping the pattern as the tooltip (list) / route: line (waterfall)."""
-    import re
-
+    keeping the pattern as `name` (list tooltip) / `route` (waterfall)."""
     ds = await make_ds(public_viewer=True)
     await ds.client.get("/-/versions.json")
     await drain()
 
-    listing = await ds.client.get("/-/traces")
-    # The concrete path is the link label...
-    assert "GET /-/versions.json" in listing.text
-    # ...and the route-pattern span name survives as the title tooltip.
-    match = re.search(r"title='(GET [^']*)'", listing.text)
-    assert match, listing.text
-    route_pattern = match.group(1)
+    rows = page_data((await ds.client.get("/-/traces")).text)["traces"]
+    row = next(t for t in rows if t["label"] == "GET /-/versions.json")
+    route_pattern = row["name"]
     assert route_pattern != "GET /-/versions.json"
 
-    trace_id = re.search(r"/-/traces/([0-9a-f]{32})", listing.text).group(1)
-    waterfall = await ds.client.get(f"/-/traces/{trace_id}")
+    waterfall = await ds.client.get(f"/-/traces/{row['trace_id']}")
     assert "<title>GET /-/versions.json</title>" in waterfall.text
-    assert "route: <code>" in waterfall.text
+    detail = page_data(waterfall.text)
+    assert detail["title"] == "GET /-/versions.json"
+    assert detail["route"] == route_pattern
 
 
 @pytest.mark.asyncio
@@ -74,11 +116,12 @@ async def test_non_http_roots_fall_back_to_span_name(make_ds):
     "Ingested foreign spans without url.path keep their name as the label."
     ds = await make_ds(ingest_token="s3cret", public_viewer=True)
     await seed(ds)
-    listing = await ds.client.get("/-/traces")
-    assert ">remote-span</a>" in listing.text
+    rows = page_data((await ds.client.get("/-/traces")).text)["traces"]
+    row = next(t for t in rows if t["trace_id"] == TRACE_ID.hex())
+    assert row["label"] == "remote-span"
     waterfall = await ds.client.get(f"/-/traces/{TRACE_ID.hex()}")
     assert "<title>remote-span</title>" in waterfall.text
-    assert "route: <code>" not in waterfall.text
+    assert page_data(waterfall.text)["route"] is None
 
 
 @pytest.mark.asyncio
@@ -86,9 +129,9 @@ async def test_viewer_private_by_default(make_ds):
     ds = await make_ds(ingest_token="s3cret")
     await seed(ds)
     assert (await ds.client.get("/-/traces")).status_code == 403
-    assert (
-        await ds.client.get(f"/-/traces/{TRACE_ID.hex()}")
-    ).status_code == 403
+    assert (await ds.client.get(f"/-/traces/{TRACE_ID.hex()}")).status_code == 403
+    assert (await ds.client.post("/-/api/traces/list", json={})).status_code == 403
+    assert (await ds.client.get(f"/-/api/traces/{TRACE_ID.hex()}")).status_code == 403
 
 
 @pytest.mark.asyncio
@@ -107,8 +150,9 @@ async def test_root_actor_sees_everything(make_ds):
     cookies = {"ds_actor": ds.client.actor_cookie({"id": "root"})}
     assert (await ds.client.get("/-/traces", cookies=cookies)).status_code == 200
     assert (
-        await ds.client.get("/otel/spans.json", cookies=cookies)
+        await ds.client.post("/-/api/traces/list", json={}, cookies=cookies)
     ).status_code == 200
+    assert (await ds.client.get("/otel/spans.json", cookies=cookies)).status_code == 200
 
 
 @pytest.mark.asyncio
@@ -117,3 +161,30 @@ async def test_other_databases_unaffected(make_ds):
     ds = await make_ds(ingest_token="s3cret")
     response = await ds.client.get("/_memory.json")
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_built_manifest_serves_hashed_assets(make_ds, tmp_path):
+    """Without a dev path configured, vite_entry resolves the built
+    manifest (present after `just frontend`, which CI runs first)."""
+    from datasette.app import Datasette
+
+    from datasette_otel_receiver import store
+
+    ds = Datasette(
+        [],
+        memory=True,
+        config={
+            "plugins": {
+                "datasette-otel-receiver": {
+                    "public_viewer": True,
+                    "db_path": str(tmp_path / "otel.db"),
+                }
+            }
+        },
+    )
+    await ds.invoke_startup()
+    response = await ds.client.get("/-/traces")
+    assert response.status_code == 200
+    assert "/-/static-plugins/datasette_otel_receiver/gen/" in response.text
+    assert page_data(response.text)["database"] == store.db_name(ds)

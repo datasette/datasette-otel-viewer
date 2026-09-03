@@ -1,0 +1,20 @@
+/* Shared by both pages. Datasette's base.html supplies the chrome (header,
+   footer, fonts); this only styles what mounts under #app-root. */
+#app-root {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 1rem 3rem;
+}
+#app-root a {
+  color: #0b62a4;
+}
+#app-root .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+#app-root .dim {
+  color: #777;
+}
+#app-root .status-error {
+  color: #b00020;
+  font-weight: 600;
+}

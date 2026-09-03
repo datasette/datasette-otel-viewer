@@ -253,9 +253,7 @@ async def maybe_prune(datasette, force: bool = False) -> None:
     _last_prune = now
 
     config = _plugin_config(datasette)
-    retention_hours = float(
-        config.get("retention_hours", DEFAULT_RETENTION_HOURS)
-    )
+    retention_hours = float(config.get("retention_hours", DEFAULT_RETENTION_HOURS))
     max_spans = int(config.get("max_spans", DEFAULT_MAX_SPANS))
     cutoff_ns = int((time.time() - retention_hours * 3600) * 1e9)
 
@@ -274,9 +272,7 @@ async def maybe_prune(datasette, force: bool = False) -> None:
             )
             doomed = [
                 row[0]
-                for row in conn.execute(
-                    PRUNE_SIZE_SELECT_SQL, {"max_spans": max_spans}
-                )
+                for row in conn.execute(PRUNE_SIZE_SELECT_SQL, {"max_spans": max_spans})
             ]
             if doomed:
                 placeholders = ", ".join("?" for _ in doomed)

@@ -5,9 +5,9 @@ itself."""
 import asyncio
 
 import pytest
+from conftest import drain, raw_span_rows, reset_tracer_state
 
 from datasette_otel_receiver import selfsource
-from conftest import drain, raw_span_rows, reset_tracer_state
 
 
 @pytest.mark.asyncio
@@ -86,11 +86,13 @@ def test_span_to_row_matches_store_columns():
     provider = TracerProvider(shutdown_on_exit=False)
     provider.add_span_processor(SimpleSpanProcessor(collected))
     tracer = provider.get_tracer("test-scope", "1.2.3")
-    with tracer.start_as_current_span(
-        "parent", attributes={"db.query.text": "select 1", "list": ("a", "b")}
+    with (
+        tracer.start_as_current_span(
+            "parent", attributes={"db.query.text": "select 1", "list": ("a", "b")}
+        ),
+        tracer.start_as_current_span("child"),
     ):
-        with tracer.start_as_current_span("child"):
-            pass
+        pass
 
     spans = collected.get_finished_spans()
     rows = [selfsource.span_to_row(s) for s in spans]

@@ -3,11 +3,10 @@
 import json
 
 import pytest
+from conftest import raw_span_rows
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
     ExportTraceServiceRequest,
 )
-
-from conftest import raw_span_rows
 
 TRACE_ID = bytes.fromhex("0af7651916cd43dd8448eb211c80319c")
 SPAN_ID = bytes.fromhex("b7ad6b7169203331")
