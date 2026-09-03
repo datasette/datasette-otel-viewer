@@ -7,7 +7,7 @@ import asyncio
 import pytest
 from conftest import drain, raw_span_rows, reset_tracer_state
 
-from datasette_otel_receiver import selfsource
+from datasette_otel_viewer import selfsource
 
 
 @pytest.mark.asyncio
@@ -80,7 +80,7 @@ def test_span_to_row_matches_store_columns():
         InMemorySpanExporter,
     )
 
-    from datasette_otel_receiver import store
+    from datasette_otel_viewer import store
 
     collected = InMemorySpanExporter()
     provider = TracerProvider(shutdown_on_exit=False)

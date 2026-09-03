@@ -96,12 +96,9 @@ Operator grant story (also exercised in tests/test_permissions.py):
   ``default_permissions.config_permissions_sql``; no plugin code needed
   beyond registering the Action.
 - ``--root``: also works with zero extra plugin code, as described above.
-- Ingest (``POST /v1/traces`` et al, ticket 04) is untouched by design:
-  this hook only intercedes for the four read actions listed above, never
-  for the ingest routes, which use the separate static bearer-token check
-  in ``ingest.py`` (``_check_auth``). A future ``otel-ingest`` Action
-  mapping tokens to actors is explicitly deferred (see plan.md "Deferred /
-  future").
+- Nothing writes into the store over HTTP: this plugin only records the
+  telemetry this instance emits, so ``otel-view`` is the whole permission
+  surface and this hook only intercedes for the read actions listed above.
 """
 
 from __future__ import annotations
@@ -110,8 +107,7 @@ from datasette import hookimpl
 from datasette.permissions import Action, PermissionSQL
 
 from . import store
-
-PLUGIN_NAME = "datasette-otel-receiver"
+from .store import PLUGIN_NAME
 
 VIEW_ACTION_NAME = "otel-view"
 
@@ -173,8 +169,7 @@ def register_actions():
 async def permission_resources_sql(datasette, actor, action):
     if action not in READ_ACTIONS:
         # Not one of the read actions that exposes the otel database --
-        # no opinion, and in particular do not touch the ingest routes
-        # (ticket 04's static bearer-token auth is separate by design).
+        # no opinion, let normal rules decide.
         return None
 
     if await datasette.allowed(action=VIEW_ACTION_NAME, actor=actor):

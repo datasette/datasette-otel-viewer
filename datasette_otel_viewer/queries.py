@@ -26,7 +26,7 @@ def http_label(name: str | None, attributes: dict) -> tuple[str, str | None]:
     """``(label, route)`` for a root span. HTTP roots are *named* after the
     low-cardinality route pattern (semconv); the concrete path lives in
     ``url.path``. Show "<method> <path>" and keep the pattern as ``route``;
-    non-HTTP roots and ingested foreign spans keep their name."""
+    non-HTTP roots (startup, background work) keep their name."""
     url_path = attributes.get("url.path")
     if url_path:
         method = attributes.get("http.request.method")

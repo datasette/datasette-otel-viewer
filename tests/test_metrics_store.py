@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from datasette_otel_receiver import store
+from datasette_otel_viewer import store
 
 
 def make_metric(name, type="gauge", **kw):

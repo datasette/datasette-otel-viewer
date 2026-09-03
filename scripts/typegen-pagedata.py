@@ -6,7 +6,7 @@ frontend/src/page_data/*.types.ts."""
 import json
 from pathlib import Path
 
-from datasette_otel_receiver.page_data import __exports__
+from datasette_otel_viewer.page_data import __exports__
 
 for model in __exports__:
     out = Path("frontend/src/page_data") / f"{model.__name__}_schema.json"

@@ -1,6 +1,6 @@
 """Fixtures: OTel set-once reset + a Datasette factory + drain helper.
 
-Importing this conftest imports datasette_otel_receiver, which installs the
+Importing this conftest imports datasette_otel_viewer, which installs the
 plugin's provider (owner mode) before any test imports datasette.app - so
 every datasette span in the whole pytest run flows to that one provider,
 same approach as the sibling plugins' test suites. Between tests we rewind
@@ -21,8 +21,8 @@ import pytest
 import pytest_asyncio
 from opentelemetry import trace
 
-import datasette_otel_receiver  # noqa: F401  (installs the providers)
-from datasette_otel_receiver import selfmetrics, selfsource, store
+import datasette_otel_viewer  # noqa: F401  (installs the providers)
+from datasette_otel_viewer import selfmetrics, selfsource, store
 
 _SNAPSHOT = dict(selfsource._state)
 _METRICS_SNAPSHOT = dict(selfmetrics._state)
@@ -96,14 +96,12 @@ async def make_ds(tmp_path):
             memory=True,
             config={
                 "plugins": {
-                    "datasette-otel-receiver": plugin_config,
+                    "datasette-otel-viewer": plugin_config,
                     # Vite dev mode: page routes emit dev-server script tags
                     # instead of resolving the built manifest, so the suite
                     # runs without `just frontend`.
                     "datasette-vite": {
-                        "dev_paths": {
-                            "datasette_otel_receiver": "http://localhost:5186/"
-                        }
+                        "dev_paths": {"datasette_otel_viewer": "http://localhost:5186/"}
                     },
                 }
             },

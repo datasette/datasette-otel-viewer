@@ -1,7 +1,7 @@
 [project]
-name = "datasette-otel-receiver"
+name = "datasette-otel-viewer"
 version = "0.1.0a0"
-description = "Store, receive and browse OpenTelemetry traces in Datasette"
+description = "Browse the OpenTelemetry traces and metrics a Datasette instance emits, from inside that instance"
 readme = "README.md"
 authors = [{name = "Alex Garcia"}]
 license = "Apache-2.0"
@@ -14,7 +14,6 @@ dependencies = [
     "datasette-plugin-router>=0.0.1a4",
     "datasette-vite>=0.0.1a4",
     "opentelemetry-sdk>=1.37",
-    "opentelemetry-proto>=1.37",
     "pydantic>=2",
 ]
 
@@ -23,22 +22,22 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project.urls]
-Homepage = "https://github.com/datasette/datasette-otel-receiver"
-Changelog = "https://github.com/datasette/datasette-otel-receiver/releases"
-Issues = "https://github.com/datasette/datasette-otel-receiver/issues"
+Homepage = "https://github.com/datasette/datasette-otel-viewer"
+Changelog = "https://github.com/datasette/datasette-otel-viewer/releases"
+Issues = "https://github.com/datasette/datasette-otel-viewer/issues"
 
 [project.entry-points.datasette]
-otel_receiver = "datasette_otel_receiver"
+otel_viewer = "datasette_otel_viewer"
 
 [dependency-groups]
 dev = ["pytest", "pytest-asyncio", "ruff>=0.15.0"]
 
 [tool.setuptools.packages.find]
-include = ["datasette_otel_receiver*"]
+include = ["datasette_otel_viewer*"]
 exclude = ["frontend*"]
 
 [tool.setuptools.package-data]
-datasette_otel_receiver = ["static/**/*", "templates/**/*", "manifest.json"]
+datasette_otel_viewer = ["static/**/*", "templates/**/*", "manifest.json"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"

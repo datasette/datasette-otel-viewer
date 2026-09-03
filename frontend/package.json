@@ -1,5 +1,5 @@
 {
-  "name": "datasette-otel-receiver-frontend",
+  "name": "datasette-otel-viewer-frontend",
   "private": true,
   "type": "module",
   "scripts": {

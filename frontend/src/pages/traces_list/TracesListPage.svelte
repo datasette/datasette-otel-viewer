@@ -203,7 +203,7 @@
       {:else}
         <tr>
           <td colspan="7" class="empty">
-            No traces yet - make a request (or send some), then refresh.
+            No traces yet — make a request, then refresh.
           </td>
         </tr>
       {/each}

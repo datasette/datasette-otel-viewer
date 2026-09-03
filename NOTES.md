@@ -1,17 +1,20 @@
-# datasette-otel-receiver
+# datasette-otel-viewer
 
-Store, receive and browse OpenTelemetry traces in Datasette. One plugin, three
-roles, one SQLite database:
+Browse the OpenTelemetry traces and metrics a Datasette instance emits, from
+inside that instance. One plugin, two roles, one SQLite database:
 
-- **Self-tracing** (on by default): every span this Datasette emits is stored in a
-  `traces`/`spans` database served by the same instance.
-- **OTLP receiver** (opt-in): a `POST /v1/traces` OTLP/HTTP endpoint (protobuf and
-  JSON, gzip, bearer auth) — point any OTel source at it: another Datasette
-  running [datasette-otel-otlp], a Flask app under `opentelemetry-instrument`, a
-  Deno service, a browser SDK.
-- **Viewer**: `/-/otel/traces` lists recent traces (any service), each linking to a
-  waterfall at `/-/otel/traces/<trace_id>`. The raw tables are regular Datasette
-  tables — facets, JSON API and SQL come free.
+- **Self-recording** (on by default): every span and metric point this
+  Datasette emits is stored in a `traces`/`spans` + `metrics`/`metric_points`
+  database served by the same instance.
+- **Viewer**: `/-/otel/traces` lists recent traces, each linking to a waterfall
+  at `/-/otel/traces/<trace_id>`; `/-/otel/metrics` charts the stored metrics.
+  The raw tables are regular Datasette tables — facets, JSON API and SQL come
+  free.
+
+Nothing else can write into the store over HTTP: this is a debugger for one
+instance, not a backend for a fleet. Shipping spans off to a real backend is
+the sibling exporter plugins' job (datasette-otel-otlp,
+datasette-otel-parquet).
 
 Successor to `datasette-otel-debugger`. Works against Datasette's OpenTelemetry
 branches (phase 1); no released Datasette emits these spans yet.
@@ -29,7 +32,7 @@ never recorded by Datasette core, only parameter counts.
 ## Quickstart (self mode)
 
 ```bash
-datasette install datasette-otel-receiver
+datasette install datasette-otel-viewer
 datasette mydata.db --root
 # browse a few pages, then open /-/otel/traces
 ```
@@ -37,32 +40,12 @@ datasette mydata.db --root
 No config needed: spans are stored in `otel.db` next to where you ran Datasette,
 with a 72-hour / 100,000-span ring buffer.
 
-## Receiving spans from other services
-
-```yaml
-plugins:
-  datasette-otel-receiver:
-    ingest_token: $OTEL_INGEST_TOKEN   # enables POST /v1/traces
-```
-
-Senders use standard OTLP/HTTP env vars — base endpoint, the exporters append
-`/v1/traces` themselves:
-
-```sh
-OTEL_EXPORTER_OTLP_ENDPOINT=https://your-datasette.example.com \
-OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
-OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer $OTEL_INGEST_TOKEN" \
-opentelemetry-instrument python your_app.py
-```
-
-`/v1/metrics` stores OTLP metrics (gauge, sum, histogram, exponential
-histogram, summary) into the `metrics` and `metric_points` tables — see
-"Metrics" below. `/v1/logs` is an accept-and-discard stub.
-
 ## Metrics
 
-Points are stored as sent, with their aggregation temporality (`metrics.temporality`).
-A per-second rate for a cumulative counter, with counter resets treated as a
+This instance's own metrics are exported once a minute into the `metrics` and
+`metric_points` tables, charted at `/-/otel/metrics` (see "Metrics pages"
+below). Points are stored as exported, with their aggregation temporality
+(`metrics.temporality`). A per-second rate for a cumulative counter, with counter resets treated as a
 restart from zero, is one window function away — save it as a canned query:
 
 ```sql
@@ -86,11 +69,9 @@ order by time_ns desc limit 100
 
 ```yaml
 plugins:
-  datasette-otel-receiver:
-    self_traces: true          # false: viewer/receiver only
+  datasette-otel-viewer:
+    self_traces: true          # false: browse an existing store without recording
     self_metrics: true         # false: don't store this instance's own metrics
-    ingest_token: $TOKEN       # setting this enables the OTLP endpoint
-    # allow_unauthenticated_ingest: true   # dev-only escape hatch
     public_viewer: false       # true: /-/otel/traces without a permission grant
     retention_hours: 72        # ring buffer: whole traces older than this go
     max_spans: 100000          # ...and oldest whole traces beyond this count
@@ -114,7 +95,7 @@ Consequences:
 
 - The plugin must own the `TracerProvider`. If another plugin (or the
   `opentelemetry-instrument` agent) installed one first, **self-tracing disables
-  itself** with a stderr notice; the receiver and viewer still work. The sibling
+  itself** with a stderr notice; the viewer still works. The sibling
   exporter plugins (datasette-otel-otlp, datasette-otel-parquet) attach to this
   plugin's provider, so install order matters only to them — and they handle it.
 - Self mode relies on Datasette ≥ 1.0a39 running startup and serving on a single
@@ -149,7 +130,7 @@ viewer's `/-/otel/metrics` page; set its `path` option.
 The pages are Svelte 5 + TypeScript, built with Vite and served through
 [datasette-vite]. Both are backed by a JSON API with the same shapes:
 
-- `POST /-/otel/api/traces/list` with `{"limit": 100, "service": "flask-app"}`
+- `POST /-/otel/api/traces/list` with `{"limit": 100, "service": "datasette"}`
 - `GET /-/otel/api/traces/<trace_id>`
 
 Gated exactly like the pages (`otel-view`, or `public_viewer: true`).
@@ -184,8 +165,6 @@ just frontend       # build the bundle into the package
 just test           # datasette from the otel branch via the uv source override
 just dev            # self mode on :8012 (--root; open /-/otel/traces)
 just demo           # self mode on :8003 (--root; open /-/otel/traces)
-just demo-receiver  # two-instance story, terminal 1
-just demo-sender    # terminal 2: datasette-otel-otlp exporting to terminal 1
 just shots          # regenerate docs/screenshots/*.png (used above)
 ```
 
@@ -194,4 +173,3 @@ another. `CLAUDE.md` has the code map and the type-generation pipelines.
 
 [datasette-vite]: https://github.com/datasette/datasette-vite
 
-[datasette-otel-otlp]: https://github.com/datasette/datasette-otel-otlp

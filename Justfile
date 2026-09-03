@@ -12,7 +12,7 @@ default:
 
 # TypeScript types for the JSON API, from the router's OpenAPI document
 types-routes:
-    uv run python -c 'from datasette_otel_receiver.router import router; import json; print(json.dumps(router.openapi_document_json()))' \
+    uv run python -c 'from datasette_otel_viewer.router import router; import json; print(json.dumps(router.openapi_document_json()))' \
       | npx --prefix frontend openapi-typescript > frontend/api.d.ts
 
 # TypeScript types for the embedded page data, from the Pydantic models
@@ -33,7 +33,7 @@ types-watch:
 
 # === Frontend ===
 
-# Build the frontend into datasette_otel_receiver/static/gen + manifest.json
+# Build the frontend into datasette_otel_viewer/static/gen + manifest.json
 frontend *flags:
     npm run build --prefix frontend {{flags}}
 
@@ -96,7 +96,7 @@ demo-db:
 # run `just frontend` first, or use dev-with-hmr.
 dev *options: demo-db
     DATASETTE_SECRET=abc123 uv run datasette demo.db --root \
-        -s plugins.datasette-otel-receiver.public_viewer true \
+        -s plugins.datasette-otel-viewer.public_viewer true \
         -p {{DEV_HTTP_PORT}} {{ options }}
 
 # `dev` + Vite HMR: page routes load assets from `just frontend-dev` (other
@@ -108,34 +108,13 @@ dev-with-hmr *options:
         --ignore '*.db' \
         --restart \
         --clear -- \
-        just dev -s plugins.datasette-vite.dev_paths.datasette_otel_receiver "http://localhost:{{DEV_PORT}}/" {{ options }}
+        just dev -s plugins.datasette-vite.dev_paths.datasette_otel_viewer "http://localhost:{{DEV_PORT}}/" {{ options }}
 
 # Self mode demo: browse the instance, then open http://localhost:8003/-/otel/traces
 demo *options: demo-db frontend
     uv run datasette demo.db --root \
-        -s plugins.datasette-otel-receiver.public_viewer true \
+        -s plugins.datasette-otel-viewer.public_viewer true \
         -p 8003 {{ options }}
-
-# Two-instance story, terminal 1: the receiver (viewer public for the demo)
-demo-receiver *options: frontend
-    uv run datasette --memory \
-        -s plugins.datasette-otel-receiver.ingest_token demo-token \
-        -s plugins.datasette-otel-receiver.public_viewer true \
-        -s plugins.datasette-otel-receiver.self_traces false \
-        -p 8003 {{ options }}
-
-# Two-instance story, terminal 2: an observed Datasette exporting to it via
-# the sibling datasette-otel-otlp plugin. This project's own receiver plugin
-# is in the venv too, so its self-tracing is switched off here to keep the
-# sender a pure observed instance.
-demo-sender *options: demo-db
-    uv run --with "datasette-otel-otlp @ git+https://github.com/datasette/datasette-otel-otlp" \
-      datasette demo.db \
-        -s plugins.datasette-otel-receiver.self_traces false \
-        -s plugins.datasette-otel-otlp.endpoint http://localhost:8003 \
-        -s plugins.datasette-otel-otlp.headers.authorization 'Bearer demo-token' \
-        -s plugins.datasette-otel-otlp.service_name observed-datasette \
-        -p 8004 {{ options }}
 
 # Delete demo output
 clean:
@@ -144,8 +123,9 @@ clean:
 # === Screenshots ===
 
 # Regenerate the committed doc screenshots in docs/screenshots/. Self-contained:
-# boots a throwaway datasette, seeds traces over /v1/traces, drives Playwright,
-# tears down. Builds the bundle first so shots reflect the current frontend.
+# boots a throwaway datasette, seeds traces and metrics with the
+# `scripts/shots_plugins` seed plugin (--plugins-dir), drives Playwright, tears
+# down. Builds the bundle first so shots reflect the current frontend.
 # Not run in CI — re-run and confirm `git status` is clean. Subset: `just shots trace`.
 shots *names:
     just frontend

@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from datasette_otel_receiver import store
+from datasette_otel_viewer import store
 
 
 def make_row(trace_id, span_id, start_ns, name="span"):

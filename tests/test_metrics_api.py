@@ -1,15 +1,15 @@
 """The metrics JSON API: catalogue, bucketing, group-by, histogram deltas
-and percentiles. Points are seeded straight through ``store.insert_metrics``
-so these tests do not depend on the OTLP ingest route."""
+and percentiles. Points are seeded straight through ``store.insert_metrics``,
+the same path the self-mode exporter uses."""
 
 import json
 import time
 
 import pytest
 
-from datasette_otel_receiver import queries, store
-from datasette_otel_receiver.metrics_math import NS
-from datasette_otel_receiver.router import router
+from datasette_otel_viewer import queries, store
+from datasette_otel_viewer.metrics_math import NS
+from datasette_otel_viewer.router import router
 
 # An hour ago, floored to a minute: every bucket assertion below is exact
 # against a 60 s step.

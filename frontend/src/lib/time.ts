@@ -11,8 +11,8 @@ const UNITS: [limit: number, divisor: number, suffix: string][] = [
 ];
 
 /** "3m ago" style relative time. Clamped to "just now" for <5s (including
- * slightly-in-the-future timestamps from clock skew between sender and
- * this instance). */
+ * slightly-in-the-future timestamps from clock skew between the browser
+ * clock and this instance). */
 export function formatRelativeTime(
   startNs: number,
   now: number = Date.now(),

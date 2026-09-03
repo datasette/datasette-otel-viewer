@@ -2,9 +2,9 @@
 decoded spans, and enforce retention.
 
 Schema ported from datasette-otel-debugger (see its plan.md "Storage"): one
-wide ``spans`` table for all senders (promoted semconv columns for
-facets/sorts + full-fidelity JSON), plus a derived ``traces`` summary table
-recomputed per touched trace_id after every insert.
+wide ``spans`` table (promoted semconv columns for facets/sorts +
+full-fidelity JSON), plus a derived ``traces`` summary table recomputed
+per touched trace_id after every insert.
 
 Unlike the debugger — which installed no TracerProvider, so its writes could
 never be traced — this instance MAY have a live provider (self mode, or a
@@ -25,7 +25,7 @@ from typing import Any
 from datasette.database import Database
 from opentelemetry import context as otel_context
 
-PLUGIN_NAME = "datasette-otel-receiver"
+PLUGIN_NAME = "datasette-otel-viewer"
 DEFAULT_DB_NAME = "otel"
 DEFAULT_DB_PATH = "otel.db"
 DEFAULT_RETENTION_HOURS = 72
@@ -33,7 +33,7 @@ DEFAULT_MAX_SPANS = 100_000
 DEFAULT_MAX_METRIC_POINTS = 100_000
 PRUNE_INTERVAL_SECONDS = 60
 
-SUPPRESS_KEY = otel_context.create_key("datasette_otel_receiver.suppress")
+SUPPRESS_KEY = otel_context.create_key("datasette_otel_viewer.suppress")
 
 
 @contextlib.contextmanager
@@ -46,9 +46,9 @@ def suppress():
         otel_context.detach(token)
 
 
-# The row dict contract shared by both writers (otlp.request_to_rows for
-# ingested spans, selfsource.span_to_row for this instance's own). Promoted
-# columns may be None; attributes/resource are already-serialized JSON.
+# The row dict contract for `selfsource.span_to_row` (and for tests/seed
+# scripts that build rows by hand). Promoted columns may be None;
+# attributes/resource are already-serialized JSON.
 COLUMNS = (
     "trace_id",
     "span_id",
@@ -73,9 +73,9 @@ COLUMNS = (
     "schema_url",
 )
 
-# Row-dict contracts for the metrics writers (otlp.metrics_request_to_rows for
-# ingested metrics, the self-mode exporter for this instance's own). JSON-typed
-# columns are already-serialized strings; missing keys insert NULL.
+# Row-dict contracts for `selfmetrics.sdk_metrics_to_rows` (and for tests/seed
+# scripts that build rows by hand). JSON-typed columns are already-serialized
+# strings; missing keys insert NULL.
 METRIC_COLUMNS = ("name", "description", "unit", "type", "temporality", "monotonic")
 
 METRIC_POINT_COLUMNS = (
@@ -103,9 +103,9 @@ METRIC_POINT_COLUMNS = (
     "flags",
 )
 
-# span_id PRIMARY KEY: dedupes retried OTLP batches (with INSERT_SQL's
-# `or replace`) and gives stable row URLs. All FKs declared-but-unenforced on
-# purpose: orphan spans whose parent never arrives (remote traceparent
+# span_id PRIMARY KEY: dedupes spans re-delivered by a retried
+# BatchSpanProcessor export (with INSERT_SQL's `or replace`) and gives stable
+# row URLs. All FKs declared-but-unenforced on purpose: orphan spans whose parent never arrives (remote traceparent
 # parents) and batches inserted before their traces summary row exists are
 # design requirements. IF NOT EXISTS everywhere — no migration framework in
 # v1, ensure_db() reruns this on every startup.

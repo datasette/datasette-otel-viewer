@@ -7,10 +7,10 @@ import time
 import pytest
 from conftest import page_data
 
-from datasette_otel_receiver import page_data as page_data_module
-from datasette_otel_receiver import store
-from datasette_otel_receiver.metrics_math import NS
-from datasette_otel_receiver.router import FORBIDDEN_TEXT
+from datasette_otel_viewer import page_data as page_data_module
+from datasette_otel_viewer import store
+from datasette_otel_viewer.metrics_math import NS
+from datasette_otel_viewer.router import FORBIDDEN_TEXT
 
 BASE_NS = ((time.time_ns() - 3600 * NS) // (60 * NS)) * (60 * NS)
 

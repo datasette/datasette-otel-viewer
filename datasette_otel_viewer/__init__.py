@@ -1,12 +1,11 @@
-"""datasette-otel-receiver: span store + /-/otel/traces viewer + OTLP ingest.
+"""datasette-otel-viewer: span store + /-/otel/traces viewer.
 
-Three roles, one SQLite store (see PLAN.md):
+Two roles, one SQLite store (see PLAN.md):
 
 - self (default on): store the spans this instance emits — requires owning
   the TracerProvider, installed at import time below (see selfsource.py for
   why both the ownership and the timing are load-bearing). Metrics ride the
   same ownership rule in selfmetrics.py.
-- receiver (opt-in): POST /v1/traces OTLP/HTTP ingest, bearer auth.
 - viewer: /-/otel/traces list + waterfall (Svelte, built with Vite and served
   through datasette-vite), gated by the otel-view action.
 
@@ -18,7 +17,7 @@ import asyncio
 from datasette import hookimpl
 from datasette_vite import vite_entry
 
-from . import ingest, selfmetrics, selfsource, store
+from . import selfmetrics, selfsource, store
 from .permissions import (  # noqa: F401  (re-exported for pluggy's scan)
     permission_resources_sql,
     register_actions,
@@ -49,20 +48,13 @@ def startup(datasette):
 
 @hookimpl
 def register_routes():
-    return router.routes() + [
-        # Top-level /v1/* because stock OTLP exporters append these paths to
-        # the base endpoint. They 503 until ingest is configured. Plain
-        # tuples, not router routes: protobuf bodies, not JSON contracts.
-        (r"^/v1/traces$", ingest.traces_view),
-        (r"^/v1/metrics$", ingest.metrics_view),
-        (r"^/v1/logs$", ingest.stub_view),
-    ]
+    return router.routes()
 
 
 @hookimpl
 def extra_template_vars(datasette):
     return {
-        "datasette_otel_receiver_vite_entry": vite_entry(
-            datasette=datasette, plugin_package="datasette_otel_receiver"
+        "datasette_otel_viewer_vite_entry": vite_entry(
+            datasette=datasette, plugin_package="datasette_otel_viewer"
         )
     }

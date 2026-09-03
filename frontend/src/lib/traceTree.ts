@@ -23,7 +23,7 @@ function byStartNs(a: Span, b: Span): number {
  * explicit requirement): a span is a ROOT if its `parent_span_id` is
  * `null`, OR it references a `span_id` that isn't present anywhere in this
  * trace -- e.g. a remote parent from a proxy's `traceparent` header whose
- * own span was never ingested by this instance. Every span in the input
+ * own span was never recorded by this instance. Every span in the input
  * ends up in exactly one tree; nothing is ever dropped for having an
  * unresolvable parent.
  *
@@ -32,7 +32,7 @@ function byStartNs(a: Span, b: Span): number {
  * in time order.
  *
  * Cycle guard: malformed or duplicate data (e.g. a duplicated span_id
- * ingested twice with different parent linkages) could in principle wire
+ * recorded twice with different parent linkages) could in principle wire
  * up a loop reachable from a real root. Recursion tracks a `visited` set
  * of span_ids along the current root-to-node path; if a span_id reappears
  * on its own ancestor path, that branch's children are cut off there

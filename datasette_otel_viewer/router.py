@@ -16,7 +16,7 @@ from datasette_plugin_router import Router
 from . import store
 from .permissions import VIEW_ACTION_NAME
 
-router = Router(title="datasette-otel-receiver", version="0.1.0")
+router = Router(title="datasette-otel-viewer", version="0.1.0")
 
 
 async def viewer_allowed(datasette, actor) -> bool:

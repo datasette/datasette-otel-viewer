@@ -77,9 +77,8 @@ class SuppressingSampler(Sampler):
 
 
 def span_to_row(span) -> dict:
-    """ReadableSpan -> the store.COLUMNS row dict, mirroring
-    otlp.request_to_rows so self-stored and ingested spans are
-    indistinguishable in the store."""
+    """ReadableSpan -> the store.COLUMNS row dict: the single writer for
+    the ``spans`` table."""
     attrs = {}
     for key, value in (span.attributes or {}).items():
         attrs[key] = list(value) if isinstance(value, tuple) else value

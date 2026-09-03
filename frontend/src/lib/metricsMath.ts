@@ -1,5 +1,5 @@
 /** Pure metric math for the metrics pages. Mirrors
- * datasette_otel_receiver/metrics_math.py (same test vectors) — keep in sync. */
+ * datasette_otel_viewer/metrics_math.py (same test vectors) — keep in sync. */
 
 export const NS = 1_000_000_000;
 

@@ -1,10 +1,10 @@
-"""Tests for datasette_otel_receiver.metrics_math. These vectors are mirrored
+"""Tests for datasette_otel_viewer.metrics_math. These vectors are mirrored
 in the frontend's metricsMath.test.ts (ticket 07) so both implementations
 agree."""
 
 import pytest
 
-from datasette_otel_receiver.metrics_math import (
+from datasette_otel_viewer.metrics_math import (
     aggregate_numbers,
     bucket_start,
     counter_increment,

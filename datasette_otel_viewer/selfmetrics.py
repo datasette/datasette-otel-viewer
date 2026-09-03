@@ -49,7 +49,7 @@ EXPORT_INTERVAL_MILLIS = 60_000
 # Exports (not points) held while the loop is still unknown.
 PENDING_LIMIT = 256
 
-# SDK data classes -> the `metrics.type` vocabulary otlp.py writes.
+# SDK data classes -> the `metrics.type` vocabulary stored in `metrics`.
 _TYPES = {
     Gauge: "gauge",
     Sum: "sum",
@@ -90,9 +90,8 @@ def sdk_metrics_to_rows(
     data: MetricsData | None, exclude_namespace: str | None = None
 ) -> tuple[list[dict], list[dict]]:
     """MetricsData -> (metric rows, point rows) shaped like
-    store.METRIC_COLUMNS / store.METRIC_POINT_COLUMNS, mirroring
-    otlp.metrics_request_to_rows so self-stored and ingested points are
-    indistinguishable in the store."""
+    store.METRIC_COLUMNS / store.METRIC_POINT_COLUMNS: the single writer for
+    the ``metrics`` / ``metric_points`` tables."""
     metrics_by_name: dict[str, dict] = {}
     points: list[dict] = []
     if data is None:

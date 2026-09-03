@@ -159,8 +159,8 @@
       {:else}
         <tr>
           <td colspan="6" class="empty">
-            No metrics yet — point an OTLP metrics exporter at /v1/metrics, then
-            refresh.
+            No metrics yet — this instance exports its own every minute; make a
+            few requests, then refresh.
           </td>
         </tr>
       {/each}

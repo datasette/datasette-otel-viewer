@@ -16,7 +16,7 @@ from ..page_data import (
 )
 from ..router import check_viewer, router
 
-TEMPLATE = "otel_receiver_base.html"
+TEMPLATE = "otel_viewer_base.html"
 
 
 async def _render(datasette, request, *, title, entrypoint, page_data):

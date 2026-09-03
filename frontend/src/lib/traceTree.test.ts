@@ -92,11 +92,11 @@ describe("buildTraceTree: orphan/remote-parent tolerance", () => {
 
   it("roots a span whose parent_span_id references a span not in the trace", () => {
     // e.g. a remote parent from a proxy's traceparent header that this
-    // instance never ingested a span for (plan.md's orphan tolerance
+    // instance never recorded a span for (plan.md's orphan tolerance
     // requirement).
     const orphan = makeSpan({
       span_id: "orphan",
-      parent_span_id: "never-ingested",
+      parent_span_id: "never-recorded",
       start_ns: 5,
       end_ns: 10,
     });

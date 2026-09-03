@@ -1,9 +1,10 @@
-# datasette-otel-receiver
+# datasette-otel-viewer
 
-Store, receive and browse OpenTelemetry traces in Datasette: self-tracing span
-store, opt-in OTLP/HTTP receiver, and a `/-/otel/traces` viewer. Product notes,
-privacy posture and config reference live in `NOTES.md`; this file is the
-map for working on the code.
+Browse the OpenTelemetry traces and metrics a Datasette instance emits, from
+inside that instance: a self-recording span and metric store plus the
+`/-/otel/traces` and `/-/otel/metrics` viewer. Nothing else can write into the
+store over HTTP. Product notes, privacy posture and config reference live in
+`NOTES.md`; this file is the map for working on the code.
 
 ## Architecture
 
@@ -23,7 +24,7 @@ map for working on the code.
 | `just dev` | Datasette on :8012 against `demo.db` (`--root`, viewer public); serves the built bundle |
 | `just dev-with-hmr` | `dev` + Vite HMR via datasette-vite `dev_paths`; restarts on .py/.html changes |
 | `just frontend-dev` | Vite dev server on :5186 (pair with `dev-with-hmr`) |
-| `just frontend` | Production build → `datasette_otel_receiver/static/gen/` + `manifest.json` |
+| `just frontend` | Production build → `datasette_otel_viewer/static/gen/` + `manifest.json` |
 | `just types` | Regenerate `frontend/api.d.ts` + `frontend/src/page_data/*.types.ts` from Python |
 | `just types-watch` | Watch .py files, auto-regenerate types |
 | `just format` / `just format-check` | ruff (backend) + prettier (frontend) |
@@ -31,7 +32,7 @@ map for working on the code.
 | `just test` | pytest (page routes run in Vite dev mode, no build needed) |
 | `just test-frontend` | vitest over `frontend/src/lib/*.test.ts` |
 | `just shots` | Regenerate `docs/screenshots/*.png` via Playwright (not in CI; re-run and check `git status`) |
-| `just demo` / `demo-receiver` / `demo-sender` | The NOTES.md demo stories on :8003/:8004 |
+| `just demo` | The NOTES.md self-mode demo on :8003 |
 
 CI: `.github/workflows/test.yml` builds the bundle before pytest, and
 type-checks/tests/builds the frontend in a second job.
@@ -39,19 +40,18 @@ type-checks/tests/builds the frontend in a second job.
 ## Project structure
 
 ```
-datasette_otel_receiver/
+datasette_otel_viewer/
 ├── __init__.py              # Hooks: startup, register_routes, extra_template_vars
 ├── router.py                # Shared Router + check_viewer() decorator
 ├── page_data.py             # Pydantic models: page data + API request/response
 ├── queries.py               # Read-side SQL shared by pages and API
 ├── routes/pages.py          # GET /-/otel/traces, GET /-/otel/traces/{trace_id} (HTML)
 ├── routes/api.py            # POST /-/otel/api/traces/list, GET /-/otel/api/traces/{trace_id}
-├── ingest.py                # POST /v1/traces (+ /v1/metrics, /v1/logs stubs)
-├── otlp.py                  # OTLP protobuf/JSON decoding → span rows
 ├── selfsource.py            # TracerProvider ownership + suppression sampler
+├── selfmetrics.py           # MeterProvider ownership/attach + SDK metrics → rows
 ├── store.py                 # Schema, batch insert, retention
 ├── permissions.py           # otel-view action; raw tables private by default
-├── templates/otel_receiver_base.html   # The single template
+├── templates/otel_viewer_base.html   # The single template
 ├── static/gen/, manifest.json          # Built by Vite (gitignored)
 
 frontend/src/
@@ -73,9 +73,9 @@ scripts/typegen-pagedata.py        # Pydantic → JSON Schema
 ## Page data flow
 
 1. A route in `routes/pages.py` builds a Pydantic model from `queries.py`
-2. Passes `page_data.model_dump()` (a dict) to `otel_receiver_base.html`
+2. Passes `page_data.model_dump()` (a dict) to `otel_viewer_base.html`
 3. The template embeds it as `<script id="pageData">{{ page_data | tojson }}</script>`
-   and the Vite entrypoint via `datasette_otel_receiver_vite_entry(entrypoint)`
+   and the Vite entrypoint via `datasette_otel_viewer_vite_entry(entrypoint)`
 4. The Svelte page calls `loadPageData<TracesListPageData>()`
 5. Types come from `just types-pagedata` (models listed in `page_data.__exports__`)
 
@@ -97,7 +97,8 @@ the real `Annotated[..., Body()]` objects at decoration time.
   tables stay gated (`permissions.py` emits a database-scoped deny row).
 - `check_viewer()` in `router.py` returns a plain-text 403, preserving the
   message the tests assert on.
-- Ingest uses a static bearer token (`ingest.py`), unrelated to actions.
+- There is no write path over HTTP: the store is only written by this
+  instance's own span and metric readers.
 
 ## Key conventions
 
@@ -108,6 +109,9 @@ the real `Annotated[..., Body()]` objects at decoration time.
 - Tests configure `plugins.datasette-vite.dev_paths` so page routes render
   without a build; `test_built_manifest_serves_hashed_assets` is the one test
   that needs `just frontend` first (CI does it).
+- `scripts/shots_plugins/seed.py` is loaded only by `just shots`
+  (`--plugins-dir`); it builds row dicts against `store.COLUMNS` /
+  `METRIC_POINT_COLUMNS` by hand — update it when those change.
 - Store writes run inside `store.suppress()` so spans about storing spans are
   never recorded; see `selfsource.py` before touching the write path.
   `selfmetrics.py` drops metric points whose `db.namespace` is the otel

@@ -1,19 +1,20 @@
-// Programmatic doc screenshots of datasette-otel-receiver → docs/screenshots/*.png.
+// Programmatic doc screenshots of datasette-otel-viewer → docs/screenshots/*.png.
 //
 // SELF-CONTAINED: boots its own throwaway datasette on a fixed port with a
-// fresh span store, seeds deterministic traces over the plugin's own OTLP/JSON
-// ingest endpoint, drives Playwright, then tears the server down. One command,
-// reproducible — the committed PNGs only change when the UI actually changes.
+// fresh span store, seeded at startup by scripts/shots_plugins/seed.py (loaded
+// with --plugins-dir), drives Playwright, then tears the server down. One
+// command, reproducible — the committed PNGs only change when the UI actually
+// changes.
 //
 // Output is committed; NOTES.md embeds these, so re-run + commit when the UI
 // look changes:  `just shots`  (or a subset, e.g. `just shots trace`).
 //
 // Follows the datasette-plugin-screenshots skill (../datasette-plugin-
-// screenshot-skill). Differences from its template, all because this plugin
-// is simpler than the acl-backed ones: no actor cookies (the viewer is opened
-// with public_viewer for the shots), no --plugins-dir seed plugin (seeding is
-// a POST to /v1/traces), and a frozen browser clock instead of text rewriting
-// (the list renders relative times from Date.now()).
+// screenshot-skill), including its --plugins-dir seed plugin. Differences from
+// its template: no actor cookies (the viewer is opened with public_viewer for
+// the shots), and a frozen browser clock instead of text rewriting (the list
+// renders relative times from Date.now()). The seed plugin is pinned to the
+// same instant via SHOTS_NOW.
 import { chromium } from "playwright";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join } from "node:path";
@@ -26,18 +27,19 @@ import { spawn } from "node:child_process";
 const PORT = Number(process.env.SHOTS_PORT || 8494);
 const BASE = `http://localhost:${PORT}`;
 const TRACES_URL = `${BASE}/-/otel/traces`;
-const INGEST_TOKEN = "shots-token";
+const LIST_API_URL = `${BASE}/-/otel/api/traces/list`;
 // Fresh scratch store every run (never the repo-root otel.db `just dev` uses).
-const OTEL_DB = join(tmpdir(), "datasette-otel-receiver-shots.db");
+const OTEL_DB = join(tmpdir(), "datasette-otel-viewer-shots.db");
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // frontend/scripts
 const OUT = resolve(HERE, "../../docs/screenshots");
+const SEED_DIR = resolve(HERE, "../../scripts/shots_plugins");
 
 const VIEWPORT = { width: 1200, height: 760 };
 // The seeded spans sit just before this instant, so "Started" reads as
-// seconds/minutes ago no matter when the shots are regenerated.
+// seconds/minutes ago no matter when the shots are regenerated. Passed to the
+// seed plugin as SHOTS_NOW and to the browser as a fixed clock.
 const NOW = new Date("2026-09-01T12:00:00Z");
-const NOW_NS = BigInt(NOW.getTime()) * 1_000_000n;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------------
@@ -73,30 +75,35 @@ async function startServer() {
       "--memory",
       "-p",
       String(PORT),
+      // Deterministic traces + metrics, inserted through the store's own
+      // insert functions in the seed plugin's startup hook.
+      "--plugins-dir",
+      SEED_DIR,
       "-s",
-      "plugins.datasette-otel-receiver.db_path",
+      "plugins.datasette-otel-viewer.db_path",
       OTEL_DB,
       "-s",
-      "plugins.datasette-otel-receiver.ingest_token",
-      INGEST_TOKEN,
-      "-s",
-      "plugins.datasette-otel-receiver.public_viewer",
+      "plugins.datasette-otel-viewer.public_viewer",
       "true",
-      // The instance's own spans would differ run to run: receiver-only.
+      // The instance's own spans would differ run to run: seed rows only.
       "-s",
-      "plugins.datasette-otel-receiver.self_traces",
+      "plugins.datasette-otel-viewer.self_traces",
       "false",
       // The metrics seed uses a fixed browser clock (NOW) but the store
       // prunes by real wall-clock time; keep the retention window huge so
       // seeded points survive no matter when the shots are regenerated.
       "-s",
-      "plugins.datasette-otel-receiver.retention_hours",
+      "plugins.datasette-otel-viewer.retention_hours",
       "876000",
     ],
     {
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
-      env: { ...process.env, PYTHONHASHSEED: "0" },
+      env: {
+        ...process.env,
+        PYTHONHASHSEED: "0",
+        SHOTS_NOW: NOW.toISOString(),
+      },
     },
   );
   let log = "";
@@ -132,404 +139,45 @@ function stopServer(child) {
 }
 
 // ---------------------------------------------------------------------------
-// Seed: three traces from three services, as one OTLP/JSON export. Ids and
-// timestamps are fixed so the store — and every pixel — is identical run to
-// run. Times are nanoseconds relative to NOW.
-const hex = (n, width) => n.toString(16).padStart(width, "0");
-let nextSpan = 0x1000;
+// The seed lives in scripts/shots_plugins/seed.py (loaded above with
+// --plugins-dir): fixed span ids and timestamps relative to SHOTS_NOW, so the
+// store — and every pixel — is identical run to run. These are the ids the
+// trace shot deep-links to: trace A, and its slow `db.query` child.
+const IDS = {
+  datasetteTraceId: "a1".padStart(32, "0"),
+  slowQuerySpanId: "1003".padStart(16, "0"),
+};
+const SEEDED_TRACES = 4;
 
-function span({
-  trace,
-  parent,
-  name,
-  kind = 1,
-  start,
-  dur,
-  attrs = {},
-  error,
-}) {
-  const id = hex(nextSpan++, 16);
-  const startNs = NOW_NS - BigInt(Math.round(start * 1e6));
-  const endNs = startNs + BigInt(Math.round(dur * 1e6));
-  const attributes = Object.entries(attrs).map(([key, value]) => ({
-    key,
-    value:
-      typeof value === "number"
-        ? { intValue: String(value) }
-        : { stringValue: value },
-  }));
-  return {
-    id,
-    body: {
-      traceId: trace,
-      spanId: id,
-      ...(parent ? { parentSpanId: parent } : {}),
-      name,
-      kind,
-      startTimeUnixNano: String(startNs),
-      endTimeUnixNano: String(endNs),
-      attributes,
-      status: error ? { code: 2, message: error } : { code: 0 },
-    },
-  };
-}
-
-// `start` is "ms before NOW" (so bigger = earlier), `dur` is ms.
-function datasetteTrace() {
-  const trace = hex(0xa1, 32);
-  const root = span({
-    trace,
-    name: "GET /{database}/{table}",
-    kind: 2,
-    start: 45_000,
-    dur: 38.4,
-    attrs: {
-      "http.request.method": "GET",
-      "url.path": "/demo/plants",
-      "http.route": "/{database}/{table}",
-      "http.response.status_code": 200,
-    },
-  });
-  const view = span({
-    trace,
-    parent: root.id,
-    name: "datasette.view.table",
-    start: 44_998.8,
-    dur: 35.1,
-    attrs: { "datasette.database": "demo", "datasette.table": "plants" },
-  });
-  const q1 = span({
-    trace,
-    parent: view.id,
-    name: "db.query",
-    kind: 3,
-    start: 44_996,
-    dur: 4.2,
-    attrs: {
-      "db.system.name": "sqlite",
-      "db.namespace": "demo",
-      "db.operation.name": "SELECT",
-      "db.query.text": "select count(*) from [plants]",
-    },
-  });
-  const q2 = span({
-    trace,
-    parent: view.id,
-    name: "db.query",
-    kind: 3,
-    start: 44_991,
-    dur: 21.7,
-    attrs: {
-      "db.system.name": "sqlite",
-      "db.namespace": "demo",
-      "db.operation.name": "SELECT",
-      "db.query.text":
-        "select id, name, height_cm from [plants] order by id limit 101",
-    },
-  });
-  const facet = span({
-    trace,
-    parent: view.id,
-    name: "db.query",
-    kind: 3,
-    start: 44_968,
-    dur: 6.3,
-    attrs: {
-      "db.system.name": "sqlite",
-      "db.namespace": "demo",
-      "db.operation.name": "SELECT",
-      "db.query.text":
-        "select height_cm as value, count(*) as count from [plants] group by height_cm order by count desc limit 31",
-    },
-  });
-  const render = span({
-    trace,
-    parent: root.id,
-    name: "datasette.render_template",
-    start: 44_963,
-    dur: 2.9,
-    attrs: { "datasette.template": "table.html" },
-  });
-  return [root, view, q1, q2, facet, render];
-}
-
-function flaskTrace() {
-  const trace = hex(0xb2, 32);
-  const root = span({
-    trace,
-    name: "POST /api/orders",
-    kind: 2,
-    start: 190_000,
-    dur: 212.6,
-    attrs: {
-      "http.request.method": "POST",
-      "url.path": "/api/orders",
-      "http.route": "/api/orders",
-      "http.response.status_code": 500,
-    },
-    error: "IntegrityError: UNIQUE constraint failed: orders.sku",
-  });
-  const validate = span({
-    trace,
-    parent: root.id,
-    name: "validate_order",
-    start: 189_999,
-    dur: 1.4,
-  });
-  const insert = span({
-    trace,
-    parent: root.id,
-    name: "INSERT orders",
-    kind: 3,
-    start: 189_997,
-    dur: 208.9,
-    attrs: {
-      "db.system.name": "sqlite",
-      "db.operation.name": "INSERT",
-      "db.query.text": "INSERT INTO orders (sku, qty) VALUES (?, ?)",
-    },
-    error: "UNIQUE constraint failed: orders.sku",
-  });
-  return [root, validate, insert];
-}
-
-function denoTrace() {
-  const trace = hex(0xc3, 32);
-  const root = span({
-    trace,
-    name: "GET /healthz",
-    kind: 2,
-    start: 610_000,
-    dur: 0.8,
-    attrs: {
-      "http.request.method": "GET",
-      "url.path": "/healthz",
-      "http.response.status_code": 200,
-    },
-  });
-  return [root];
-}
-
-function resourceSpans(service, spans, extra = {}) {
-  return {
-    resource: {
-      attributes: Object.entries({ "service.name": service, ...extra }).map(
-        ([key, value]) => ({ key, value: { stringValue: value } }),
-      ),
-    },
-    scopeSpans: [
-      {
-        scope: { name: "screenshots", version: "0" },
-        spans: spans.map((s) => s.body),
-      },
-    ],
-  };
-}
-
-async function seed() {
-  const datasette = datasetteTrace();
-  const body = {
-    resourceSpans: [
-      resourceSpans("datasette", datasette, { "service.version": "1.0a39" }),
-      resourceSpans("flask-app", flaskTrace()),
-      resourceSpans("deno-service", denoTrace()),
-    ],
-  };
-  const r = await fetch(`${BASE}/v1/traces`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${INGEST_TOKEN}`,
-    },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) throw new Error(`seed failed: ${r.status} ${await r.text()}`);
-  return {
-    datasetteTraceId: datasette[0].body.traceId,
-    slowQuerySpanId: datasette[3].id,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Metrics seed: one OTLP/JSON ExportMetricsServiceRequest with a cumulative
-// monotonic sum (two services), a gauge (two attribute sets), and a
-// histogram with Datasette-like duration buckets. Points land every 30s over
-// the last hour: 30s is the bucket width the "1h" range picker uses by
-// default (see metricsMath.ts stepForRange(3600) === 30), so every bucket in
-// the query window has data and no chart shows an artificial gap from
-// mismatched cadence. Values come from fixed sin/cos formulas (no PRNG), so
-// reruns are bit-identical.
-const DURATION_BOUNDS = [
-  0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10,
-];
-const METRICS_STEP_S = 30;
-// 3600 … 0 seconds before NOW, i.e. the last point lands exactly at NOW.
-const METRICS_STEPS = [...Array(121).keys()].map(
-  (i) => 3600 - i * METRICS_STEP_S,
-);
-const metricTNs = (secondsBefore) =>
-  String(NOW_NS - BigInt(secondsBefore) * 1_000_000_000n);
-const metricAttrs = (obj) =>
-  Object.entries(obj).map(([key, value]) => ({
-    key,
-    value:
-      typeof value === "number"
-        ? { intValue: String(Math.round(value)) }
-        : { stringValue: value },
-  }));
-
-// Two attribute sets (db.namespace) on one gauge; phase offsets the wave so
-// the two lines are visibly distinct rather than overlapping.
-function gaugePoints(namespace, phase) {
-  return METRICS_STEPS.map((s, i) => ({
-    timeUnixNano: metricTNs(s),
-    asInt: String(Math.max(0, Math.round(4 + 3 * Math.sin(i * 0.21 + phase)))),
-    attributes: metricAttrs({ "db.namespace": namespace }),
-  }));
-}
-
-// A monotonic cumulative counter: non-negative increments accumulate, so the
-// per-second rate view (the metric detail page's default for cumulative
-// sums) traces a smooth wave rather than a flat line.
-function sumPoints(attrs, phase) {
-  const startNs = metricTNs(METRICS_STEPS[0]);
-  let cum = 0;
-  return METRICS_STEPS.map((s, i) => {
-    cum += Math.max(0, Math.round(3 + 2 * Math.sin(i * 0.17 + phase)));
-    return {
-      startTimeUnixNano: startNs,
-      timeUnixNano: metricTNs(s),
-      asInt: String(cum),
-      attributes: metricAttrs(attrs),
-    };
-  });
-}
-
-// A cumulative histogram: per-bucket counts must be individually
-// non-decreasing over time (the server differences consecutive points), so
-// accumulate non-negative per-interval deltas whose peak bucket drifts over
-// time — a diagonal band in the heatmap instead of a static one.
-function histogramPoints() {
-  const nBuckets = DURATION_BOUNDS.length + 1;
-  const startNs = metricTNs(METRICS_STEPS[0]);
-  const cum = new Array(nBuckets).fill(0);
-  let cumCount = 0;
-  let cumSum = 0;
-  return METRICS_STEPS.map((s, i) => {
-    for (let k = 0; k < nBuckets; k++) {
-      const delta = Math.max(
-        0,
-        Math.round(4 + 3 * Math.cos((i - k * 7) * 0.13)),
-      );
-      const lower = k === 0 ? 0 : DURATION_BOUNDS[k - 1];
-      const upper = k < DURATION_BOUNDS.length ? DURATION_BOUNDS[k] : lower * 2;
-      cum[k] += delta;
-      cumCount += delta;
-      cumSum += delta * ((lower + upper) / 2);
+// The startup hook finishes before the server accepts connections, so the
+// rows are already there by the time reachable() succeeds — but poll anyway
+// rather than screenshot an empty list if that ever stops being true.
+async function waitForSeed() {
+  const deadline = Date.now() + 30_000;
+  let last = "";
+  while (Date.now() < deadline) {
+    try {
+      const r = await fetch(LIST_API_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const body = await r.text();
+      if (r.ok) {
+        const traces = JSON.parse(body).traces ?? [];
+        if (traces.length >= SEEDED_TRACES) return;
+        last = `only ${traces.length} trace(s)`;
+      } else {
+        last = `${r.status} ${body}`;
+      }
+    } catch (err) {
+      last = String(err);
     }
-    return {
-      startTimeUnixNano: startNs,
-      timeUnixNano: metricTNs(s),
-      count: String(cumCount),
-      sum: cumSum,
-      bucketCounts: cum.map(String),
-      explicitBounds: DURATION_BOUNDS,
-      attributes: metricAttrs({
-        "db.system": "sqlite",
-        "db.namespace": "demo",
-        "datasette.operation": "read",
-      }),
-    };
-  });
-}
-
-function metricsBody() {
-  const datasetteMetrics = [
-    {
-      name: "datasette.sql.threads.queue_depth",
-      unit: "{query}",
-      description: "Read queries waiting for a free worker thread",
-      gauge: {
-        dataPoints: [
-          ...gaugePoints("demo", 0),
-          ...gaugePoints("otel", Math.PI / 2),
-        ],
-      },
-    },
-    {
-      name: "http.server.request.count",
-      unit: "{request}",
-      description: "HTTP requests served",
-      sum: {
-        aggregationTemporality: 2,
-        isMonotonic: true,
-        dataPoints: sumPoints({ "http.route": "/{database}/{table}" }, 0),
-      },
-    },
-    {
-      name: "db.client.operation.duration",
-      unit: "s",
-      description: "Duration of a SQL operation issued by Datasette",
-      histogram: {
-        aggregationTemporality: 2,
-        dataPoints: histogramPoints(),
-      },
-    },
-  ];
-  const flaskMetrics = [
-    {
-      name: "http.server.request.count",
-      unit: "{request}",
-      description: "HTTP requests served",
-      sum: {
-        aggregationTemporality: 2,
-        isMonotonic: true,
-        dataPoints: sumPoints({ "http.route": "/api/orders" }, Math.PI),
-      },
-    },
-  ];
-  return {
-    resourceMetrics: [
-      {
-        resource: {
-          attributes: metricAttrs({
-            "service.name": "datasette",
-            "service.version": "1.0a39",
-          }),
-        },
-        scopeMetrics: [
-          {
-            scope: { name: "screenshots", version: "0" },
-            metrics: datasetteMetrics,
-          },
-        ],
-      },
-      {
-        resource: {
-          attributes: metricAttrs({ "service.name": "flask-app" }),
-        },
-        scopeMetrics: [
-          {
-            scope: { name: "screenshots", version: "0" },
-            metrics: flaskMetrics,
-          },
-        ],
-      },
-    ],
-  };
-}
-
-async function seedMetrics() {
-  const r = await fetch(`${BASE}/v1/metrics`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${INGEST_TOKEN}`,
-    },
-    body: JSON.stringify(metricsBody()),
-  });
-  if (!r.ok)
-    throw new Error(`metrics seed failed: ${r.status} ${await r.text()}`);
+    await sleep(250);
+  }
+  throw new Error(
+    `seed plugin never produced ${SEEDED_TRACES} traces: ${last}`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -576,7 +224,7 @@ function buildShots(browser, ids) {
   const out = (n) => resolve(OUT, `${n}.png`);
 
   return {
-    // The traces list: three services, one errored trace.
+    // The traces list: four traces from the one service, one errored.
     traces: async () => {
       const { ctx, page } = await newPage(browser);
       await page.goto(TRACES_URL);
@@ -600,8 +248,8 @@ function buildShots(browser, ids) {
       await ctx.close();
     },
 
-    // The metrics list: a gauge, a counter and a histogram across two
-    // services.
+    // The metrics list: a gauge, a counter and a histogram, all from the
+    // one service.
     metrics: async () => {
       const { ctx, page } = await newPage(browser);
       await page.goto(`${BASE}/-/otel/metrics`);
@@ -652,9 +300,8 @@ async function main() {
 
   const browser = await chromium.launch();
   try {
-    const ids = await seed();
-    await seedMetrics();
-    const shotsByName = buildShots(browser, ids);
+    await waitForSeed();
+    const shotsByName = buildShots(browser, IDS);
     const names = Object.keys(shotsByName);
     const unknown = [...requested].filter((n) => !names.includes(n));
     if (unknown.length) {

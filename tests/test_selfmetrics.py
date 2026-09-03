@@ -10,7 +10,7 @@ import pytest
 from conftest import drain_metrics, raw_metric_rows, reset_meter_state
 from datasette.telemetry_registry import DURATION_BUCKETS
 
-from datasette_otel_receiver import selfmetrics, store
+from datasette_otel_viewer import selfmetrics, store
 
 DURATION = "db.client.operation.duration"
 
@@ -42,7 +42,7 @@ def test_owner_mode_at_import():
 
 def test_resource_shared_with_tracer():
     "One Resource for both signals, so service_name config reaches metrics."
-    from datasette_otel_receiver import selfsource
+    from datasette_otel_viewer import selfsource
 
     assert selfmetrics._state["resource"] is selfsource._state["resource"]
 

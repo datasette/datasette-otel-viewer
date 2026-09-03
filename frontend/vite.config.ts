@@ -47,7 +47,7 @@ export default defineConfig({
   ],
   build: {
     manifest: "manifest.json",
-    outDir: "../datasette_otel_receiver",
+    outDir: "../datasette_otel_viewer",
     assetsDir: "static/gen",
     // The package dir also holds the Python sources: never wipe it.
     emptyOutDir: false,
