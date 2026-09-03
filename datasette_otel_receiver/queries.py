@@ -5,9 +5,16 @@ from __future__ import annotations
 
 import json
 
-from . import store
+from . import metrics_math, store
 from .page_data import (
+    POINT_LIMIT,
     SPAN_LIMIT,
+    MetricsListQuery,
+    MetricsQuery,
+    MetricsQueryResponse,
+    MetricSummaryRow,
+    Series,
+    SeriesPoint,
     SpanRow,
     TraceDetail,
     TraceRow,
@@ -116,4 +123,284 @@ async def get_trace(datasette, trace_id: str) -> TraceDetail | None:
         spans=spans,
         truncated=len(spans) == SPAN_LIMIT,
         database=db_name,
+    )
+
+
+async def list_metrics(datasette, query: MetricsListQuery) -> list[MetricSummaryRow]:
+    "The metric catalogue: definition plus point stats. Zero-point metrics stay."
+    db = datasette.get_database(store.db_name(datasette))
+    where = ""
+    params: list = []
+    if query.service:
+        # Turns the left join into an inner one on purpose: filtering by
+        # service means "metrics this service reports", not all metrics.
+        where = "where p.service_name = ?"
+        params.append(query.service)
+    result = await db.execute(
+        f"""
+        select m.name, m.description, m.unit, m.type, m.temporality, m.monotonic,
+               max(p.time_ns) as last_seen_ns, count(p.id) as point_count,
+               json_group_array(distinct p.service_name) as services
+        from metrics m left join metric_points p on p.metric_name = m.name
+        {where}
+        group by m.name order by m.name limit 500
+        """,
+        params,
+    )
+    return [
+        MetricSummaryRow(
+            name=r["name"],
+            description=r["description"],
+            unit=r["unit"],
+            type=r["type"],
+            temporality=r["temporality"],
+            monotonic=None if r["monotonic"] is None else bool(r["monotonic"]),
+            last_seen_ns=r["last_seen_ns"],
+            point_count=r["point_count"],
+            services=sorted(s for s in json.loads(r["services"]) if s),
+        )
+        for r in result.rows
+    ]
+
+
+async def get_metric(datasette, name: str) -> MetricSummaryRow | None:
+    rows = await list_metrics(datasette, MetricsListQuery())
+    return next((m for m in rows if m.name == name), None)
+
+
+async def metric_attribute_keys(datasette, name: str) -> list[str]:
+    "Distinct attribute keys seen on the newest 1000 points of a metric."
+    db = datasette.get_database(store.db_name(datasette))
+    result = await db.execute(
+        """
+        select distinct j.key from (
+          select attributes from metric_points where metric_name = ?
+          order by time_ns desc limit 1000
+        ) p, json_each(p.attributes) j order by j.key
+        """,
+        [name],
+    )
+    return [r["key"] for r in result.rows]
+
+
+def _number_value(point: dict) -> float | None:
+    value = point["value_double"]
+    if value is None:
+        value = point["value_int"]
+    return None if value is None else float(value)
+
+
+def _histogram(point: dict) -> dict | None:
+    bounds = json.loads(point["explicit_bounds"] or "null")
+    counts = json.loads(point["bucket_counts"] or "null")
+    if bounds is None or counts is None:
+        return None
+    return {
+        "count": point["count"] or 0,
+        "sum": point["sum"],
+        "min": point["min"],
+        "max": point["max"],
+        "bucket_counts": [int(c) for c in counts],
+        "explicit_bounds": [float(b) for b in bounds],
+    }
+
+
+def _merge(histograms: list[dict]) -> dict | None:
+    """merge_histograms, but tolerant of a series whose bounds changed
+    mid-range: only the entries agreeing with the newest layout survive."""
+    if not histograms:
+        return None
+    bounds = histograms[-1]["explicit_bounds"]
+    return metrics_math.merge_histograms(
+        h for h in histograms if h["explicit_bounds"] == bounds
+    )
+
+
+def _reduce_number_series(points: list[dict], step_ns: int) -> dict[int, float]:
+    "One value per bucket: the last observation in it (gauge and sum alike)."
+    reduced = {}
+    for bucket, point in metrics_math.last_per_bucket(points, step_ns).items():
+        value = _number_value(point)
+        if value is not None:
+            reduced[bucket] = value
+    return reduced
+
+
+def _reduce_histogram_series(
+    points: list[dict], step_ns: int, cumulative: bool
+) -> dict[int, dict]:
+    """One per-interval histogram per bucket. Cumulative points are
+    differenced against their predecessor first (counter resets and bounds
+    changes fall back to the raw point), then summed within the bucket;
+    delta points are already per-interval and only get summed."""
+    per_bucket: dict[int, list[dict]] = {}
+    previous = None
+    for point in points:
+        histogram = _histogram(point)
+        if histogram is None:
+            continue
+        interval = histogram
+        if cumulative:
+            interval = metrics_math.histogram_delta(previous, histogram)
+            previous = histogram
+        bucket = metrics_math.bucket_start(point["time_ns"], step_ns)
+        per_bucket.setdefault(bucket, []).append(interval)
+    merged = {}
+    for bucket, histograms in per_bucket.items():
+        one = _merge(histograms)
+        if one is not None:
+            merged[bucket] = one
+    return merged
+
+
+def _reduce_other_series(points: list[dict], step_ns: int) -> dict[int, dict]:
+    "Exponential histograms and summaries: count/sum of the last point only."
+    return {
+        bucket: {"count": point["count"], "sum": point["sum"]}
+        for bucket, point in metrics_math.last_per_bucket(points, step_ns).items()
+    }
+
+
+async def query_metric(datasette, q: MetricsQuery) -> MetricsQueryResponse | None:
+    """Bucketed series for one metric. Bucketing happens here rather than in
+    SQL because the reduction is per-series and stateful (last-wins for
+    numbers, cumulative differencing for histograms)."""
+    metric = await get_metric(datasette, q.name)
+    if metric is None:
+        return None
+    db = datasette.get_database(store.db_name(datasette))
+    step_ns = q.step_s * metrics_math.NS
+    where = ""
+    params: list = [
+        q.name,
+        metrics_math.bucket_start(q.since_ns, step_ns),
+        q.until_ns,
+    ]
+    if q.service:
+        where = "and service_name = ?"
+        params.append(q.service)
+    result = await db.execute(
+        f"""
+        select service_name, time_ns, attributes, value_double, value_int,
+               count, sum, min, max, bucket_counts, explicit_bounds
+        from metric_points
+        where metric_name = ? and time_ns >= ? and time_ns < ? {where}
+        order by time_ns limit ?
+        """,
+        params + [POINT_LIMIT],
+    )
+    rows = [dict(r) for r in result.rows]
+    truncated = len(rows) == POINT_LIMIT
+
+    # 1. Native OTel series: identity is (service, full attribute set).
+    native: dict[str, dict] = {}
+    for row in rows:
+        attributes = json.loads(row["attributes"] or "{}")
+        key = metrics_math.series_key(row["service_name"], attributes, None)
+        native.setdefault(
+            key,
+            {
+                "service_name": row["service_name"],
+                "attributes": attributes,
+                "points": [],
+            },
+        )["points"].append(row)
+
+    is_histogram = metric.type == "histogram"
+    is_number = metric.type in ("gauge", "sum")
+    cumulative = metric.temporality == "cumulative"
+
+    # 2. Reduce each native series to one value/histogram per bucket, then
+    #    regroup the natives under the requested group_by.
+    groups: dict[str, dict] = {}
+    for entry in native.values():
+        attributes = entry["attributes"]
+        kept = (
+            attributes
+            if q.group_by is None
+            else {k: attributes[k] for k in q.group_by if k in attributes}
+        )
+        key = metrics_math.series_key(entry["service_name"], attributes, q.group_by)
+        group = groups.setdefault(
+            key,
+            {
+                "service_name": entry["service_name"],
+                "attributes": kept,
+                "buckets": {},
+            },
+        )
+        if is_histogram:
+            reduced = _reduce_histogram_series(entry["points"], step_ns, cumulative)
+        elif is_number:
+            reduced = _reduce_number_series(entry["points"], step_ns)
+        else:
+            reduced = _reduce_other_series(entry["points"], step_ns)
+        for bucket, value in reduced.items():
+            group["buckets"].setdefault(bucket, []).append(value)
+
+    # 3. Aggregate the natives sharing a bucket, then read percentiles off
+    #    the merged histogram counts.
+    how = "sum" if metric.type == "sum" else "avg"
+    series: list[Series] = []
+    all_bounds: set[tuple[float, ...]] = set()
+    for key, group in sorted(groups.items()):
+        points: list[SeriesPoint] = []
+        series_bounds: list[float] | None = None
+        for bucket in sorted(group["buckets"]):
+            values = group["buckets"][bucket]
+            if is_histogram:
+                merged = _merge(values)
+                if merged is None:
+                    continue
+                series_bounds = merged["explicit_bounds"]
+                all_bounds.add(tuple(series_bounds))
+                points.append(
+                    SeriesPoint(
+                        t=bucket,
+                        count=merged["count"],
+                        sum=merged["sum"],
+                        bucket_counts=merged["bucket_counts"],
+                        percentiles={
+                            str(p): metrics_math.histogram_percentile(
+                                series_bounds,
+                                merged["bucket_counts"],
+                                p,
+                                merged.get("min"),
+                                merged.get("max"),
+                            )
+                            for p in q.percentiles
+                        },
+                    )
+                )
+            elif is_number:
+                points.append(
+                    SeriesPoint(
+                        t=bucket, value=metrics_math.aggregate_numbers(values, how)
+                    )
+                )
+            else:
+                points.append(
+                    SeriesPoint(
+                        t=bucket,
+                        count=sum(v["count"] or 0 for v in values),
+                        sum=sum(v["sum"] or 0 for v in values),
+                    )
+                )
+        series.append(
+            Series(
+                key=key,
+                service_name=group["service_name"],
+                attributes=group["attributes"],
+                explicit_bounds=series_bounds,
+                points=points,
+            )
+        )
+    return MetricsQueryResponse(
+        metric=metric,
+        since_ns=q.since_ns,
+        until_ns=q.until_ns,
+        step_s=q.step_s,
+        explicit_bounds=list(next(iter(all_bounds))) if len(all_bounds) == 1 else None,
+        series=series,
+        truncated=truncated,
     )

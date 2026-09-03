@@ -131,7 +131,9 @@ async def test_viewer_private_by_default(make_ds):
     assert (await ds.client.get("/-/otel/traces")).status_code == 403
     assert (await ds.client.get(f"/-/otel/traces/{TRACE_ID.hex()}")).status_code == 403
     assert (await ds.client.post("/-/otel/api/traces/list", json={})).status_code == 403
-    assert (await ds.client.get(f"/-/otel/api/traces/{TRACE_ID.hex()}")).status_code == 403
+    assert (
+        await ds.client.get(f"/-/otel/api/traces/{TRACE_ID.hex()}")
+    ).status_code == 403
 
 
 @pytest.mark.asyncio
@@ -153,6 +155,34 @@ async def test_root_actor_sees_everything(make_ds):
         await ds.client.post("/-/otel/api/traces/list", json={}, cookies=cookies)
     ).status_code == 200
     assert (await ds.client.get("/otel/spans.json", cookies=cookies)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_metric_tables_denied_anonymously_even_with_public_viewer(make_ds):
+    from test_ingest_metrics import protobuf_metrics_body
+
+    ds = await make_ds(ingest_token="s3cret", public_viewer=True)
+    response = await ds.client.post(
+        "/v1/metrics",
+        content=protobuf_metrics_body(),
+        headers={
+            "content-type": "application/x-protobuf",
+            "authorization": "Bearer s3cret",
+        },
+    )
+    assert response.status_code == 200
+    assert (await ds.client.get("/otel/metric_points.json")).status_code == 403
+    assert (await ds.client.get("/otel/metrics.json")).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_root_sees_metric_tables(make_ds):
+    ds = await make_ds(ingest_token="s3cret")
+    ds.root_enabled = True
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "root"})}
+    assert (
+        await ds.client.get("/otel/metric_points.json", cookies=cookies)
+    ).status_code == 200
 
 
 @pytest.mark.asyncio

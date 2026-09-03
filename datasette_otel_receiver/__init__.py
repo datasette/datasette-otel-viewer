@@ -50,7 +50,7 @@ def register_routes():
         # the base endpoint. They 503 until ingest is configured. Plain
         # tuples, not router routes: protobuf bodies, not JSON contracts.
         (r"^/v1/traces$", ingest.traces_view),
-        (r"^/v1/metrics$", ingest.stub_view),
+        (r"^/v1/metrics$", ingest.metrics_view),
         (r"^/v1/logs$", ingest.stub_view),
     ]
 

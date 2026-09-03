@@ -14,11 +14,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from .metrics_math import NS
 
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 500
 SPAN_LIMIT = 5000
+
+# Ceilings for the metrics query API: a query reads at most POINT_LIMIT raw
+# points (beyond that the response is flagged truncated), and the range/step
+# bounds keep one request from asking for millions of buckets.
+POINT_LIMIT = 50_000
+MAX_STEP_S = 86_400
+MAX_RANGE_NS = 30 * 24 * 3600 * NS
 
 
 class TraceRow(BaseModel):
@@ -104,4 +113,110 @@ class TraceDetailPageData(TraceDetail):
     pass
 
 
-__exports__ = [TracesListPageData, TraceDetailPageData]
+class MetricSummaryRow(BaseModel):
+    "One row of the metric catalogue: the ``metrics`` definition + point stats."
+
+    name: str
+    description: str | None = None
+    unit: str | None = None
+    # gauge | sum | histogram | exponential_histogram | summary
+    type: str
+    temporality: str | None = None  # delta | cumulative
+    monotonic: bool | None = None
+    last_seen_ns: int | None = None
+    point_count: int
+    services: list[str] = []
+
+
+class MetricsListQuery(BaseModel):
+    "Body of ``POST /-/otel/api/metrics/list``."
+
+    service: str | None = None
+
+
+class MetricsListResponse(BaseModel):
+    metrics: list[MetricSummaryRow]
+
+
+class MetricsQuery(BaseModel):
+    "Body of ``POST /-/otel/api/metrics/query``."
+
+    name: str
+    since_ns: int
+    until_ns: int
+    step_s: int = Field(default=60, ge=1, le=MAX_STEP_S)
+    # None = keep the full attribute set (one series per native OTel series);
+    # [] = merge everything per service; ["k", ...] = keep only those keys.
+    group_by: list[str] | None = None
+    service: str | None = None
+    percentiles: list[float] = Field(default=[0.5, 0.9, 0.99])
+
+    @model_validator(mode="after")
+    def _check_range(self):
+        if self.until_ns <= self.since_ns:
+            raise ValueError("until_ns must be greater than since_ns")
+        if self.until_ns - self.since_ns > MAX_RANGE_NS:
+            raise ValueError("range too large (max 30 days)")
+        if any(not 0 < p <= 1 for p in self.percentiles):
+            raise ValueError("percentiles must be in (0, 1]")
+        return self
+
+
+class SeriesPoint(BaseModel):
+    "One bucket of one series. Buckets with no points are omitted entirely."
+
+    t: int  # bucket start, ns
+    # gauge: avg of the per-series last values; sum: their sum (raw, not rate)
+    value: float | None = None
+    count: int | None = None  # histogram: observations in this interval
+    sum: float | None = None
+    # histogram: per-interval counts (differenced when cumulative), one more
+    # entry than explicit_bounds -- the trailing (last bound, +Inf) bucket.
+    bucket_counts: list[int] | None = None
+    percentiles: dict[str, float | None] | None = None  # {"0.5": ...}
+
+
+class Series(BaseModel):
+    key: str  # metrics_math.series_key
+    service_name: str | None = None
+    attributes: dict[str, Any] = {}  # the attributes group_by kept
+    explicit_bounds: list[float] | None = None
+    points: list[SeriesPoint]
+
+
+class MetricsQueryResponse(BaseModel):
+    metric: MetricSummaryRow
+    since_ns: int
+    until_ns: int
+    step_s: int
+    # Shared histogram bounds, or None when the series disagree.
+    explicit_bounds: list[float] | None = None
+    series: list[Series]
+    truncated: bool = False
+
+
+class MetricsListPageData(BaseModel):
+    "Embedded by ``GET /-/otel/metrics``."
+
+    metrics: list[MetricSummaryRow]
+    services: list[str]
+    database: str
+
+
+class MetricDetailPageData(BaseModel):
+    """Embedded by ``GET /-/otel/metrics/<name>``; series are fetched
+    client-side via ``POST /-/otel/api/metrics/query`` so the browser can
+    compute the time range itself."""
+
+    metric: MetricSummaryRow
+    attribute_keys: list[str]
+    services: list[str]
+    database: str
+
+
+__exports__ = [
+    TracesListPageData,
+    TraceDetailPageData,
+    MetricsListPageData,
+    MetricDetailPageData,
+]

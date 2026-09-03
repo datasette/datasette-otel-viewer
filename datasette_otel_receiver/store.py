@@ -30,6 +30,7 @@ DEFAULT_DB_NAME = "otel"
 DEFAULT_DB_PATH = "otel.db"
 DEFAULT_RETENTION_HOURS = 72
 DEFAULT_MAX_SPANS = 100_000
+DEFAULT_MAX_METRIC_POINTS = 100_000
 PRUNE_INTERVAL_SECONDS = 60
 
 SUPPRESS_KEY = otel_context.create_key("datasette_otel_receiver.suppress")
@@ -70,6 +71,36 @@ COLUMNS = (
     "scope_name",
     "scope_version",
     "schema_url",
+)
+
+# Row-dict contracts for the metrics writers (otlp.metrics_request_to_rows for
+# ingested metrics, the self-mode exporter for this instance's own). JSON-typed
+# columns are already-serialized strings; missing keys insert NULL.
+METRIC_COLUMNS = ("name", "description", "unit", "type", "temporality", "monotonic")
+
+METRIC_POINT_COLUMNS = (
+    "metric_name",
+    "service_name",
+    "scope_name",
+    "start_ns",
+    "time_ns",
+    "attributes",  # JSON object
+    "value_double",
+    "value_int",  # gauge / sum
+    "count",
+    "sum",
+    "min",
+    "max",  # histogram / exp histogram / summary
+    "bucket_counts",
+    "explicit_bounds",  # JSON arrays (histogram)
+    "exp_scale",
+    "exp_zero_count",
+    "exp_positive",
+    "exp_negative",  # exp histogram
+    "quantile_values",  # JSON [[q, v], ...] (summary)
+    "exemplars",  # JSON array
+    "resource",  # JSON object
+    "flags",
 )
 
 # span_id PRIMARY KEY: dedupes retried OTLP batches (with INSERT_SQL's
@@ -113,6 +144,39 @@ create index if not exists idx_spans_name_start_ns on spans (name, start_ns);
 create index if not exists idx_spans_trace_id on spans (trace_id);
 create index if not exists idx_spans_service_name_start_ns
   on spans (service_name, start_ns);
+
+create table if not exists metrics (
+  name text primary key,
+  description text,
+  unit text,
+  type text not null,        -- gauge | sum | histogram | exponential_histogram | summary
+  temporality text,          -- delta | cumulative | null (gauge, summary)
+  monotonic integer          -- 1/0 for sums, null otherwise
+);
+
+-- Append-only: OTLP points have no identity, a retried batch is a second
+-- observation. No natural-key constraint on purpose (see plan.md D3).
+create table if not exists metric_points (
+  id integer primary key,
+  metric_name text not null references metrics(name),
+  service_name text,
+  scope_name text,
+  start_ns integer,
+  time_ns integer not null,
+  attributes text not null default '{}',
+  value_double real, value_int integer,
+  count integer, sum real, min real, max real,
+  bucket_counts text, explicit_bounds text,
+  exp_scale integer, exp_zero_count integer, exp_positive text, exp_negative text,
+  quantile_values text,
+  exemplars text,
+  resource text,
+  flags integer
+);
+create index if not exists idx_metric_points_name_time
+  on metric_points (metric_name, time_ns);
+create index if not exists idx_metric_points_service_time
+  on metric_points (service_name, time_ns);
 """
 
 INSERT_SQL = "insert or replace into spans ({}) values ({})".format(
@@ -179,6 +243,33 @@ select trace_id from (
 ) where cumulative > :max_spans
 """
 
+METRICS_UPSERT_SQL = """
+insert into metrics (name, description, unit, type, temporality, monotonic)
+values (:name, :description, :unit, :type, :temporality, :monotonic)
+on conflict(name) do update set
+  description = excluded.description,
+  unit = excluded.unit,
+  type = excluded.type,
+  temporality = excluded.temporality,
+  monotonic = excluded.monotonic
+"""
+
+INSERT_METRIC_POINTS_SQL = "insert into metric_points ({}) values ({})".format(
+    ", ".join(METRIC_POINT_COLUMNS), ", ".join("?" for _ in METRIC_POINT_COLUMNS)
+)
+
+# Oldest points beyond the cap, by insertion order (id). The subquery is NULL
+# when there are <= :max rows, and `id <= NULL` matches nothing.
+PRUNE_METRIC_POINTS_SIZE_SQL = """
+delete from metric_points where id <= (
+  select id from metric_points order by id desc limit 1 offset :max_metric_points
+)
+"""
+PRUNE_METRIC_POINTS_AGE_SQL = "delete from metric_points where time_ns < :cutoff_ns"
+PRUNE_ORPHAN_METRICS_SQL = """
+delete from metrics where name not in (select distinct metric_name from metric_points)
+"""
+
 
 def _plugin_config(datasette) -> dict:
     return datasette.plugin_config(PLUGIN_NAME) or {}
@@ -238,6 +329,39 @@ async def insert_spans(datasette, rows: list[dict]) -> int:
     return len(rows)
 
 
+def _point_values(point: dict[str, Any]) -> tuple:
+    # attributes is `not null default '{}'`; a default only applies when a
+    # column is omitted from the statement, not when NULL is passed
+    # explicitly, so a missing key needs the fallback spelled out here.
+    return tuple(
+        (point.get("attributes") or "{}")
+        if column == "attributes"
+        else point.get(column)
+        for column in METRIC_POINT_COLUMNS
+    )
+
+
+async def insert_metrics(datasette, metrics: list[dict], points: list[dict]) -> int:
+    """Upsert metric definitions, then append points. Runs suppressed like
+    insert_spans (self-tracing must not record the store's own writes).
+    Returns the number of points written."""
+    if not metrics and not points:
+        return 0
+    db = datasette.databases[db_name(datasette)]
+    with suppress():
+        if metrics:
+            await db.execute_write_many(
+                METRICS_UPSERT_SQL,
+                [{c: m.get(c) for c in METRIC_COLUMNS} for m in metrics],
+            )
+        if points:
+            await db.execute_write_many(
+                INSERT_METRIC_POINTS_SQL,
+                [_point_values(p) for p in points],
+            )
+    return len(points)
+
+
 _last_prune = 0.0
 
 
@@ -245,7 +369,9 @@ async def maybe_prune(datasette, force: bool = False) -> None:
     """Trace-granular ring buffer, throttled to once per PRUNE_INTERVAL_SECONDS.
 
     Age first (retention_hours), then size (max_spans): both delete whole
-    traces so `traces` never drifts from `spans`."""
+    traces so `traces` never drifts from `spans`. Metric points share the
+    same age cutoff and get their own size cap (max_metric_points); orphaned
+    `metrics` rows (no points left) are dropped last."""
     global _last_prune
     now = time.monotonic()
     if not force and now - _last_prune < PRUNE_INTERVAL_SECONDS:
@@ -255,6 +381,7 @@ async def maybe_prune(datasette, force: bool = False) -> None:
     config = _plugin_config(datasette)
     retention_hours = float(config.get("retention_hours", DEFAULT_RETENTION_HOURS))
     max_spans = int(config.get("max_spans", DEFAULT_MAX_SPANS))
+    max_metric_points = int(config.get("max_metric_points", DEFAULT_MAX_METRIC_POINTS))
     cutoff_ns = int((time.time() - retention_hours * 3600) * 1e9)
 
     db = datasette.databases[db_name(datasette)]
@@ -284,6 +411,12 @@ async def maybe_prune(datasette, force: bool = False) -> None:
                     f"delete from traces where trace_id in ({placeholders})",
                     doomed,
                 )
+            conn.execute(PRUNE_METRIC_POINTS_AGE_SQL, {"cutoff_ns": cutoff_ns})
+            conn.execute(
+                PRUNE_METRIC_POINTS_SIZE_SQL,
+                {"max_metric_points": max_metric_points},
+            )
+            conn.execute(PRUNE_ORPHAN_METRICS_SQL)
             conn.commit()
 
         await db.execute_write_fn(prune)

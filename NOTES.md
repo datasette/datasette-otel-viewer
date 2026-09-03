@@ -55,8 +55,32 @@ OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer $OTEL_INGEST_TOKEN" \
 opentelemetry-instrument python your_app.py
 ```
 
-`/v1/metrics` and `/v1/logs` are accept-and-discard stubs (so instrumented
-senders don't log 404 warnings); traces only in v1.
+`/v1/metrics` stores OTLP metrics (gauge, sum, histogram, exponential
+histogram, summary) into the `metrics` and `metric_points` tables — see
+"Metrics" below. `/v1/logs` is an accept-and-discard stub.
+
+## Metrics
+
+Points are stored as sent, with their aggregation temporality (`metrics.temporality`).
+A per-second rate for a cumulative counter, with counter resets treated as a
+restart from zero, is one window function away — save it as a canned query:
+
+```sql
+with s as (
+  select time_ns, service_name, attributes,
+         coalesce(value_double, value_int) as v,
+         lag(coalesce(value_double, value_int)) over w as prev_v,
+         lag(time_ns) over w as prev_t
+  from metric_points
+  where metric_name = :metric
+  window w as (partition by service_name, attributes order by time_ns)
+)
+select time_ns, service_name, attributes,
+       case when v < prev_v then v else v - prev_v end
+         / ((time_ns - prev_t) / 1e9) as per_second
+from s where prev_t is not null
+order by time_ns desc limit 100
+```
 
 ## Config reference
 
@@ -69,6 +93,7 @@ plugins:
     public_viewer: false       # true: /-/otel/traces without a permission grant
     retention_hours: 72        # ring buffer: whole traces older than this go
     max_spans: 100000          # ...and oldest whole traces beyond this count
+    max_metric_points: 100000  # ...and the oldest metric points beyond this count
     db_name: otel
     db_path: otel.db
     service_name: datasette    # service.name for self-emitted spans

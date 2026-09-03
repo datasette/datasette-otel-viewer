@@ -60,9 +60,12 @@
   async function refresh() {
     loading = true;
     error = null;
-    const { data, error: apiError } = await client.POST("/-/otel/api/traces/list", {
-      body: { limit, service: service || null },
-    });
+    const { data, error: apiError } = await client.POST(
+      "/-/otel/api/traces/list",
+      {
+        body: { limit, service: service || null },
+      },
+    );
     if (apiError || !data) {
       error = apiError ? JSON.stringify(apiError) : "Request failed";
     } else {

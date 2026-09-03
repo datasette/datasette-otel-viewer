@@ -1,10 +1,10 @@
 """OTLP ingest routes, ported from datasette-otel-debugger.
 
-Top-level ``POST /v1/traces`` (stock OTel exporters append ``/v1/traces`` to
-``OTEL_EXPORTER_OTLP_ENDPOINT``, so the path must not live under ``/-/``),
-plus accept-and-discard stubs for ``/v1/metrics`` and ``/v1/logs`` so the
-default ``opentelemetry-instrument`` metrics export (~every 60s) doesn't spam
-the sender with 404s.
+Top-level ``POST /v1/traces`` and ``POST /v1/metrics`` (stock OTel exporters
+append these paths to ``OTEL_EXPORTER_OTLP_ENDPOINT``, so they must not live
+under ``/-/``), plus an accept-and-discard stub for ``/v1/logs`` so the
+default ``opentelemetry-instrument`` logs export doesn't spam the sender with
+404s.
 
 One change from the donor: ``insert_spans`` already runs inside
 ``store.suppress()`` — necessary here because this instance may have a live
@@ -32,7 +32,7 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
 
 from . import otlp, store
 
-STUB_COUNTERS = {"metrics": 0, "logs": 0}
+STUB_COUNTERS = {"logs": 0}
 
 
 def _plugin_config(datasette) -> dict:
@@ -121,8 +121,32 @@ async def traces_view(request, datasette):
     return _success_response(content_type, ExportTraceServiceResponse)
 
 
+async def metrics_view(request, datasette):
+    if request.method != "POST":
+        return Response.text("Method not allowed", status=405)
+
+    auth_error = _check_auth(datasette, request)
+    if auth_error is not None:
+        return auth_error
+
+    content_type = request.headers.get("content-type") or ""
+    try:
+        body = await _read_body(request)
+        req = otlp.parse_metrics_body(body, content_type)
+    except otlp.UnsupportedContentType:
+        return Response.text(f"unsupported content-type: {content_type!r}", status=415)
+    except otlp.DecodeError as exc:
+        return Response.text(str(exc), status=400)
+
+    metrics, points = otlp.metrics_request_to_rows(req)
+    await store.insert_metrics(datasette, metrics, points)
+    await store.maybe_prune(datasette)
+
+    return _success_response(content_type, ExportMetricsServiceResponse)
+
+
 async def stub_view(request, datasette):
-    "Accept-and-discard handler shared by /v1/metrics and /v1/logs."
+    "Accept-and-discard handler for /v1/logs."
     if request.method != "POST":
         return Response.text("Method not allowed", status=405)
 
@@ -131,12 +155,6 @@ async def stub_view(request, datasette):
         return auth_error
 
     await request.post_body()
-    signal = "metrics" if request.path.rstrip("/").endswith("/metrics") else "logs"
-    STUB_COUNTERS[signal] += 1
-    response_message_cls = (
-        ExportMetricsServiceResponse
-        if signal == "metrics"
-        else ExportLogsServiceResponse
-    )
+    STUB_COUNTERS["logs"] += 1
     content_type = request.headers.get("content-type") or ""
-    return _success_response(content_type, response_message_cls)
+    return _success_response(content_type, ExportLogsServiceResponse)

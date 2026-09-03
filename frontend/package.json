@@ -28,6 +28,7 @@
     "glob": "^13.0.6",
     "json-schema-to-typescript": "^15.0.4",
     "openapi-fetch": "^0.17.0",
-    "openapi-typescript": "^7.13.0"
+    "openapi-typescript": "^7.13.0",
+    "svelteplot": "0.14.2"
   }
 }
