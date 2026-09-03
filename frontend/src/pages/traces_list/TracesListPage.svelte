@@ -94,7 +94,7 @@
 </script>
 
 <main class="traces">
-  <h1>Traces</h1>
+  <h1>Traces <a class="dim" href="/-/otel/metrics">Metrics &rarr;</a></h1>
 
   <div class="controls">
     <label>
@@ -221,6 +221,11 @@
 <style>
   h1 {
     margin: 0 0 1rem;
+  }
+  h1 a {
+    font-size: 0.8rem;
+    font-weight: normal;
+    margin-left: 1rem;
   }
   .controls {
     display: flex;
