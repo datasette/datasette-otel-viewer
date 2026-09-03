@@ -9,10 +9,11 @@ map for working on the code.
 
 - **Backend:** Python, Datasette (otel branch, see `[tool.uv.sources]`),
   datasette-plugin-router, Pydantic, opentelemetry-sdk/proto
-- **Frontend:** Svelte 5 (runes), TypeScript, Vite, openapi-fetch, served
-  through datasette-vite
-- **Store:** `otel.db` (`traces` + `spans` tables, `store.py`), no migration
-  framework — `SCHEMA_SQL` is `IF NOT EXISTS` and reruns on every startup
+- **Frontend:** Svelte 5 (runes), TypeScript, Vite, openapi-fetch, SveltePlot
+  (metric charts only), served through datasette-vite
+- **Store:** `otel.db` (`traces` + `spans`, `metrics` + `metric_points`,
+  `store.py`), no migration framework — `SCHEMA_SQL` is `IF NOT EXISTS` and
+  reruns on every startup
 - **Build:** Just (Justfile), uv (Python), npm (frontend)
 
 ## Commands
@@ -56,7 +57,10 @@ datasette_otel_receiver/
 frontend/src/
 ├── pages/traces_list/       # List page (TracesListPage.svelte)
 ├── pages/trace_detail/      # Waterfall + inspector (TraceDetailPage, WaterfallRow)
+├── pages/metrics_list/      # Metrics table
+├── pages/metric_detail/     # SveltePlot charts (SeriesChart, HistogramHeatmap, PercentileChart)
 ├── lib/traceTree.ts         # Span forest assembly (unit-tested), time.ts, sort.ts
+├── lib/metricsMath.ts       # TS twin of metrics_math.py (shared test vectors), metricsSeries.ts
 ├── components/SortHeader.svelte
 ├── page_data/load.ts        # loadPageData<T>()
 ├── api.ts                   # openapi-fetch client over api.d.ts
@@ -106,3 +110,9 @@ the real `Annotated[..., Body()]` objects at decoration time.
   that needs `just frontend` first (CI does it).
 - Store writes run inside `store.suppress()` so spans about storing spans are
   never recorded; see `selfsource.py` before touching the write path.
+  `selfmetrics.py` drops metric points whose `db.namespace` is the otel
+  database for the same reason.
+- `metrics_math.py` and `frontend/src/lib/metricsMath.ts` must stay in sync;
+  both test files assert the same vectors.
+- The metrics planning package (research, decision log, tickets) is in
+  `plans/metrics/`, untracked.

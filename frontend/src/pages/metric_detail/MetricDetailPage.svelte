@@ -157,9 +157,7 @@
   <a class="back-link" href="/-/otel/metrics">&larr; all metrics</a>
   <h1 class="mono">{metric.name}</h1>
   <p class="dim meta">
-    {metric.type}{#if metric.temporality}
-      &middot; {metric.temporality}{/if}{#if unit}
-      &middot; {unit}{/if}
+    {[metric.type, metric.temporality, unit].filter(Boolean).join(" \u00b7 ")}
   </p>
   {#if metric.description}
     <p class="dim">{metric.description}</p>

@@ -154,6 +154,27 @@ The pages are Svelte 5 + TypeScript, built with Vite and served through
 
 Gated exactly like the pages (`otel-view`, or `public_viewer: true`).
 
+### Metrics pages
+
+![Metrics list](docs/screenshots/metrics.png)
+
+![Metric detail: histogram heatmap and percentiles](docs/screenshots/metric.png)
+
+`/-/otel/metrics` lists every stored metric (type, unit, services, point
+count, last seen); `/-/otel/metrics/<name>` charts one: multi-series lines
+for gauges and sums with a per-second rate toggle for cumulative counters,
+a bucket heatmap plus p50/p90/p99 for histograms, a time-range picker,
+service filter and attribute split. Charts are [SveltePlot]. Both pages sit
+on the same typed API:
+
+- `POST /-/otel/api/metrics/list` with `{"service": "datasette"}`
+- `POST /-/otel/api/metrics/query` with `{"name": "db.client.operation.duration",
+  "since_ns": ..., "until_ns": ..., "step_s": 30, "group_by": ["db.namespace"],
+  "percentiles": [0.5, 0.9, 0.99]}` — bucketed server-side, cumulative
+  histograms differenced with counter-reset handling.
+
+[SveltePlot]: https://svelteplot.dev/
+
 ## Development
 
 ```bash

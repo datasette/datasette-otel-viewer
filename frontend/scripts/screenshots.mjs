@@ -86,6 +86,12 @@ async function startServer() {
       "-s",
       "plugins.datasette-otel-receiver.self_traces",
       "false",
+      // The metrics seed uses a fixed browser clock (NOW) but the store
+      // prunes by real wall-clock time; keep the retention window huge so
+      // seeded points survive no matter when the shots are regenerated.
+      "-s",
+      "plugins.datasette-otel-receiver.retention_hours",
+      "876000",
     ],
     {
       stdio: ["ignore", "pipe", "pipe"],
@@ -345,6 +351,188 @@ async function seed() {
 }
 
 // ---------------------------------------------------------------------------
+// Metrics seed: one OTLP/JSON ExportMetricsServiceRequest with a cumulative
+// monotonic sum (two services), a gauge (two attribute sets), and a
+// histogram with Datasette-like duration buckets. Points land every 30s over
+// the last hour: 30s is the bucket width the "1h" range picker uses by
+// default (see metricsMath.ts stepForRange(3600) === 30), so every bucket in
+// the query window has data and no chart shows an artificial gap from
+// mismatched cadence. Values come from fixed sin/cos formulas (no PRNG), so
+// reruns are bit-identical.
+const DURATION_BOUNDS = [
+  0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10,
+];
+const METRICS_STEP_S = 30;
+// 3600 … 0 seconds before NOW, i.e. the last point lands exactly at NOW.
+const METRICS_STEPS = [...Array(121).keys()].map(
+  (i) => 3600 - i * METRICS_STEP_S,
+);
+const metricTNs = (secondsBefore) =>
+  String(NOW_NS - BigInt(secondsBefore) * 1_000_000_000n);
+const metricAttrs = (obj) =>
+  Object.entries(obj).map(([key, value]) => ({
+    key,
+    value:
+      typeof value === "number"
+        ? { intValue: String(Math.round(value)) }
+        : { stringValue: value },
+  }));
+
+// Two attribute sets (db.namespace) on one gauge; phase offsets the wave so
+// the two lines are visibly distinct rather than overlapping.
+function gaugePoints(namespace, phase) {
+  return METRICS_STEPS.map((s, i) => ({
+    timeUnixNano: metricTNs(s),
+    asInt: String(Math.max(0, Math.round(4 + 3 * Math.sin(i * 0.21 + phase)))),
+    attributes: metricAttrs({ "db.namespace": namespace }),
+  }));
+}
+
+// A monotonic cumulative counter: non-negative increments accumulate, so the
+// per-second rate view (the metric detail page's default for cumulative
+// sums) traces a smooth wave rather than a flat line.
+function sumPoints(attrs, phase) {
+  const startNs = metricTNs(METRICS_STEPS[0]);
+  let cum = 0;
+  return METRICS_STEPS.map((s, i) => {
+    cum += Math.max(0, Math.round(3 + 2 * Math.sin(i * 0.17 + phase)));
+    return {
+      startTimeUnixNano: startNs,
+      timeUnixNano: metricTNs(s),
+      asInt: String(cum),
+      attributes: metricAttrs(attrs),
+    };
+  });
+}
+
+// A cumulative histogram: per-bucket counts must be individually
+// non-decreasing over time (the server differences consecutive points), so
+// accumulate non-negative per-interval deltas whose peak bucket drifts over
+// time — a diagonal band in the heatmap instead of a static one.
+function histogramPoints() {
+  const nBuckets = DURATION_BOUNDS.length + 1;
+  const startNs = metricTNs(METRICS_STEPS[0]);
+  const cum = new Array(nBuckets).fill(0);
+  let cumCount = 0;
+  let cumSum = 0;
+  return METRICS_STEPS.map((s, i) => {
+    for (let k = 0; k < nBuckets; k++) {
+      const delta = Math.max(
+        0,
+        Math.round(4 + 3 * Math.cos((i - k * 7) * 0.13)),
+      );
+      const lower = k === 0 ? 0 : DURATION_BOUNDS[k - 1];
+      const upper = k < DURATION_BOUNDS.length ? DURATION_BOUNDS[k] : lower * 2;
+      cum[k] += delta;
+      cumCount += delta;
+      cumSum += delta * ((lower + upper) / 2);
+    }
+    return {
+      startTimeUnixNano: startNs,
+      timeUnixNano: metricTNs(s),
+      count: String(cumCount),
+      sum: cumSum,
+      bucketCounts: cum.map(String),
+      explicitBounds: DURATION_BOUNDS,
+      attributes: metricAttrs({
+        "db.system": "sqlite",
+        "db.namespace": "demo",
+        "datasette.operation": "read",
+      }),
+    };
+  });
+}
+
+function metricsBody() {
+  const datasetteMetrics = [
+    {
+      name: "datasette.sql.threads.queue_depth",
+      unit: "{query}",
+      description: "Read queries waiting for a free worker thread",
+      gauge: {
+        dataPoints: [
+          ...gaugePoints("demo", 0),
+          ...gaugePoints("otel", Math.PI / 2),
+        ],
+      },
+    },
+    {
+      name: "http.server.request.count",
+      unit: "{request}",
+      description: "HTTP requests served",
+      sum: {
+        aggregationTemporality: 2,
+        isMonotonic: true,
+        dataPoints: sumPoints({ "http.route": "/{database}/{table}" }, 0),
+      },
+    },
+    {
+      name: "db.client.operation.duration",
+      unit: "s",
+      description: "Duration of a SQL operation issued by Datasette",
+      histogram: {
+        aggregationTemporality: 2,
+        dataPoints: histogramPoints(),
+      },
+    },
+  ];
+  const flaskMetrics = [
+    {
+      name: "http.server.request.count",
+      unit: "{request}",
+      description: "HTTP requests served",
+      sum: {
+        aggregationTemporality: 2,
+        isMonotonic: true,
+        dataPoints: sumPoints({ "http.route": "/api/orders" }, Math.PI),
+      },
+    },
+  ];
+  return {
+    resourceMetrics: [
+      {
+        resource: {
+          attributes: metricAttrs({
+            "service.name": "datasette",
+            "service.version": "1.0a39",
+          }),
+        },
+        scopeMetrics: [
+          {
+            scope: { name: "screenshots", version: "0" },
+            metrics: datasetteMetrics,
+          },
+        ],
+      },
+      {
+        resource: {
+          attributes: metricAttrs({ "service.name": "flask-app" }),
+        },
+        scopeMetrics: [
+          {
+            scope: { name: "screenshots", version: "0" },
+            metrics: flaskMetrics,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+async function seedMetrics() {
+  const r = await fetch(`${BASE}/v1/metrics`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${INGEST_TOKEN}`,
+    },
+    body: JSON.stringify(metricsBody()),
+  });
+  if (!r.ok)
+    throw new Error(`metrics seed failed: ${r.status} ${await r.text()}`);
+}
+
+// ---------------------------------------------------------------------------
 // Kill carets/transitions and hide dev-only widgets so a re-run with no UI
 // change produces no binary diff.
 const STABILITY_CSS = `*, *::before, *::after {
@@ -411,6 +599,40 @@ function buildShots(browser, ids) {
       await page.screenshot({ path: out("trace") });
       await ctx.close();
     },
+
+    // The metrics list: a gauge, a counter and a histogram across two
+    // services.
+    metrics: async () => {
+      const { ctx, page } = await newPage(browser);
+      await page.goto(`${BASE}/-/otel/metrics`);
+      await page
+        .locator("main.metrics tbody tr.row-link")
+        .first()
+        .waitFor({ timeout: 15_000 });
+      await page.screenshot({ path: out("metrics") });
+      await ctx.close();
+    },
+
+    // The histogram detail: heatmap + percentile chart for the last hour.
+    // Each SveltePlot <Plot> renders its own legend as a small nested
+    // svg (inside .plot-header .color-legend), so scope to the chart's own
+    // top-level .plot-body > svg rather than matching both.
+    metric: async () => {
+      const { ctx, page } = await newPage(browser);
+      await page.goto(`${BASE}/-/otel/metrics/db.client.operation.duration`);
+      await page
+        .locator(
+          '[data-testid="histogram-heatmap"] > figure.svelteplot > div.plot-body > svg',
+        )
+        .waitFor({ timeout: 15_000 });
+      await page
+        .locator(
+          '[data-testid="percentile-chart"] > figure.svelteplot > div.plot-body > svg',
+        )
+        .waitFor({ timeout: 15_000 });
+      await page.screenshot({ path: out("metric"), fullPage: true });
+      await ctx.close();
+    },
   };
 }
 
@@ -431,6 +653,7 @@ async function main() {
   const browser = await chromium.launch();
   try {
     const ids = await seed();
+    await seedMetrics();
     const shotsByName = buildShots(browser, ids);
     const names = Object.keys(shotsByName);
     const unknown = [...requested].filter((n) => !names.includes(n));
