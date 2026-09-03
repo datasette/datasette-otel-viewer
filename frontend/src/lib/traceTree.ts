@@ -17,7 +17,7 @@ function byStartNs(a: Span, b: Span): number {
 
 /**
  * Assemble a flat list of spans (as returned by
- * `GET /-/api/traces/{trace_id}`) into a forest of `SpanNode` trees.
+ * `GET /-/otel/api/traces/{trace_id}`) into a forest of `SpanNode` trees.
  *
  * Root rule (orphan/remote-parent tolerance: an
  * explicit requirement): a span is a ROOT if its `parent_span_id` is

@@ -9,8 +9,8 @@ roles, one SQLite database:
   JSON, gzip, bearer auth) — point any OTel source at it: another Datasette
   running [datasette-otel-otlp], a Flask app under `opentelemetry-instrument`, a
   Deno service, a browser SDK.
-- **Viewer**: `/-/traces` lists recent traces (any service), each linking to a
-  waterfall at `/-/traces/<trace_id>`. The raw tables are regular Datasette
+- **Viewer**: `/-/otel/traces` lists recent traces (any service), each linking to a
+  waterfall at `/-/otel/traces/<trace_id>`. The raw tables are regular Datasette
   tables — facets, JSON API and SQL come free.
 
 Successor to `datasette-otel-debugger`. Works against Datasette's OpenTelemetry
@@ -23,7 +23,7 @@ user-supplied SQL, with literals.** It also holds URL paths and other request
 attributes. Because of that the store and viewer are **private by default**:
 reading them requires the `otel-view` permission (grant it via standard
 Datasette permissions config, or use `--root`). `public_viewer: true` opens the
-`/-/traces` pages only — the raw tables stay gated. SQL parameter *values* are
+`/-/otel/traces` pages only — the raw tables stay gated. SQL parameter *values* are
 never recorded by Datasette core, only parameter counts.
 
 ## Quickstart (self mode)
@@ -31,7 +31,7 @@ never recorded by Datasette core, only parameter counts.
 ```bash
 datasette install datasette-otel-receiver
 datasette mydata.db --root
-# browse a few pages, then open /-/traces
+# browse a few pages, then open /-/otel/traces
 ```
 
 No config needed: spans are stored in `otel.db` next to where you ran Datasette,
@@ -66,7 +66,7 @@ plugins:
     self_traces: true          # false: viewer/receiver only
     ingest_token: $TOKEN       # setting this enables the OTLP endpoint
     # allow_unauthenticated_ingest: true   # dev-only escape hatch
-    public_viewer: false       # true: /-/traces without a permission grant
+    public_viewer: false       # true: /-/otel/traces without a permission grant
     retention_hours: 72        # ring buffer: whole traces older than this go
     max_spans: 100000          # ...and oldest whole traces beyond this count
     db_name: otel
@@ -104,8 +104,8 @@ Consequences:
 The pages are Svelte 5 + TypeScript, built with Vite and served through
 [datasette-vite]. Both are backed by a JSON API with the same shapes:
 
-- `POST /-/api/traces/list` with `{"limit": 100, "service": "flask-app"}`
-- `GET /-/api/traces/<trace_id>`
+- `POST /-/otel/api/traces/list` with `{"limit": 100, "service": "flask-app"}`
+- `GET /-/otel/api/traces/<trace_id>`
 
 Gated exactly like the pages (`otel-view`, or `public_viewer: true`).
 
@@ -116,8 +116,8 @@ uv sync && npm install --prefix frontend
 just types          # Python → TypeScript (OpenAPI + page-data schemas)
 just frontend       # build the bundle into the package
 just test           # datasette from the otel branch via the uv source override
-just dev            # self mode on :8012 (--root; open /-/traces)
-just demo           # self mode on :8003 (--root; open /-/traces)
+just dev            # self mode on :8012 (--root; open /-/otel/traces)
+just demo           # self mode on :8003 (--root; open /-/otel/traces)
 just demo-receiver  # two-instance story, terminal 1
 just demo-sender    # terminal 2: datasette-otel-otlp exporting to terminal 1
 just shots          # regenerate docs/screenshots/*.png (used above)

@@ -15,7 +15,7 @@
 
   // The server embeds the full trace (every span, attributes/resource
   // already JSON-decoded) as page data; see routes/pages.py. The same
-  // payload is available as JSON at /-/api/traces/{trace_id}.
+  // payload is available as JSON at /-/otel/api/traces/{trace_id}.
   const pageData = loadPageData<TraceDetailPageData>();
 
   const spans = pageData.spans;
@@ -100,7 +100,7 @@
 
 <main class="trace" class:with-inspector={selectedNode !== null}>
   <header class="trace-header">
-    <a class="back-link" href="/-/traces">&larr; all traces</a>
+    <a class="back-link" href="/-/otel/traces">&larr; all traces</a>
     <div class="header-row">
       <h1>{pageData.title}</h1>
       <div class="trace-id-row">

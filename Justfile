@@ -110,7 +110,7 @@ dev-with-hmr *options:
         --clear -- \
         just dev -s plugins.datasette-vite.dev_paths.datasette_otel_receiver "http://localhost:{{DEV_PORT}}/" {{ options }}
 
-# Self mode demo: browse the instance, then open http://localhost:8003/-/traces
+# Self mode demo: browse the instance, then open http://localhost:8003/-/otel/traces
 demo *options: demo-db frontend
     uv run datasette demo.db --root \
         -s plugins.datasette-otel-receiver.public_viewer true \

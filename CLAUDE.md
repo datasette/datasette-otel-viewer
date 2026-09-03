@@ -1,7 +1,7 @@
 # datasette-otel-receiver
 
 Store, receive and browse OpenTelemetry traces in Datasette: self-tracing span
-store, opt-in OTLP/HTTP receiver, and a `/-/traces` viewer. Product notes,
+store, opt-in OTLP/HTTP receiver, and a `/-/otel/traces` viewer. Product notes,
 privacy posture and config reference live in `NOTES.md`; this file is the
 map for working on the code.
 
@@ -43,8 +43,8 @@ datasette_otel_receiver/
 ├── router.py                # Shared Router + check_viewer() decorator
 ├── page_data.py             # Pydantic models: page data + API request/response
 ├── queries.py               # Read-side SQL shared by pages and API
-├── routes/pages.py          # GET /-/traces, GET /-/traces/{trace_id} (HTML)
-├── routes/api.py            # POST /-/api/traces/list, GET /-/api/traces/{trace_id}
+├── routes/pages.py          # GET /-/otel/traces, GET /-/otel/traces/{trace_id} (HTML)
+├── routes/api.py            # POST /-/otel/api/traces/list, GET /-/otel/api/traces/{trace_id}
 ├── ingest.py                # POST /v1/traces (+ /v1/metrics, /v1/logs stubs)
 ├── otlp.py                  # OTLP protobuf/JSON decoding → span rows
 ├── selfsource.py            # TracerProvider ownership + suppression sampler
@@ -79,7 +79,7 @@ scripts/typegen-pagedata.py        # Pydantic → JSON Schema
 
 1. `routes/api.py` declares `output=Model` and `body: Annotated[Model, Body()]`
 2. `just types-routes` → `router.openapi_document_json()` → openapi-typescript → `frontend/api.d.ts`
-3. The frontend calls `client.POST("/-/api/traces/list", { body })` via `src/api.ts`
+3. The frontend calls `client.POST("/-/otel/api/traces/list", { body })` via `src/api.ts`
 
 The list fetch is a POST with a body (not GET + query string) because the
 router only types path params and bodies. Do **not** add

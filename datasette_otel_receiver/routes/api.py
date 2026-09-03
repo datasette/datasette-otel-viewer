@@ -1,4 +1,4 @@
-"""JSON routes under ``/-/api/traces``. Typed end to end: ``output=`` and
+"""JSON routes under ``/-/otel/api/traces``. Typed end to end: ``output=`` and
 ``Body()`` feed the OpenAPI document that generates ``frontend/api.d.ts``.
 
 The list fetch is a POST with a Pydantic body rather than GET with query
@@ -15,14 +15,14 @@ from ..page_data import TraceDetail, TracesListResponse, TracesQuery
 from ..router import check_viewer, router
 
 
-@router.POST(r"^/-/api/traces/list$", output=TracesListResponse)
+@router.POST(r"^/-/otel/api/traces/list$", output=TracesListResponse)
 @check_viewer()
 async def api_traces_list(datasette, request, body: Annotated[TracesQuery, Body()]):
     traces = await queries.list_traces(datasette, body)
     return Response.json(TracesListResponse(traces=traces).model_dump())
 
 
-@router.GET(r"^/-/api/traces/(?P<trace_id>[0-9a-f]{32})$", output=TraceDetail)
+@router.GET(r"^/-/otel/api/traces/(?P<trace_id>[0-9a-f]{32})$", output=TraceDetail)
 @check_viewer()
 async def api_trace_detail(datasette, request, trace_id: str):
     detail = await queries.get_trace(datasette, trace_id)

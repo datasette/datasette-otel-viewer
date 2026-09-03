@@ -60,7 +60,7 @@
   async function refresh() {
     loading = true;
     error = null;
-    const { data, error: apiError } = await client.POST("/-/api/traces/list", {
+    const { data, error: apiError } = await client.POST("/-/otel/api/traces/list", {
       body: { limit, service: service || null },
     });
     if (apiError || !data) {
@@ -76,7 +76,7 @@
   }
 
   function traceUrl(traceId: string): string {
-    return `/-/traces/${traceId}`;
+    return `/-/otel/traces/${traceId}`;
   }
 
   function goToTrace(traceId: string) {

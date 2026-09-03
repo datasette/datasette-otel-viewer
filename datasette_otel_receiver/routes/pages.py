@@ -30,7 +30,7 @@ async def _render(datasette, request, *, title, entrypoint, page_data):
     )
 
 
-@router.GET(r"^/-/traces$")
+@router.GET(r"^/-/otel/traces$")
 @check_viewer()
 async def traces_list_page(datasette, request):
     page_data = TracesListPageData(
@@ -48,7 +48,7 @@ async def traces_list_page(datasette, request):
     )
 
 
-@router.GET(r"^/-/traces/(?P<trace_id>[0-9a-f]{32})$")
+@router.GET(r"^/-/otel/traces/(?P<trace_id>[0-9a-f]{32})$")
 @check_viewer()
 async def trace_detail_page(datasette, request, trace_id: str):
     detail = await queries.get_trace(datasette, trace_id)

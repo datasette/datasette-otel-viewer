@@ -40,7 +40,7 @@ class TraceRow(BaseModel):
 
 
 class TracesQuery(BaseModel):
-    "Body of ``POST /-/api/traces/list``: filter + page size."
+    "Body of ``POST /-/otel/api/traces/list``: filter + page size."
 
     limit: int = Field(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT)
     service: str | None = None
@@ -51,7 +51,7 @@ class TracesListResponse(BaseModel):
 
 
 class TracesListPageData(BaseModel):
-    "Embedded by ``GET /-/traces``: first page + the service filter choices."
+    "Embedded by ``GET /-/otel/traces``: first page + the service filter choices."
 
     traces: list[TraceRow]
     services: list[str]
@@ -87,7 +87,7 @@ class SpanRow(BaseModel):
 
 class TraceDetail(BaseModel):
     """Everything the waterfall needs. Served both embedded (page data of
-    ``GET /-/traces/<id>``) and as JSON (``GET /-/api/traces/<id>``)."""
+    ``GET /-/otel/traces/<id>``) and as JSON (``GET /-/otel/api/traces/<id>``)."""
 
     trace_id: str
     # "<method> <url.path>" for HTTP roots, else the root span name.

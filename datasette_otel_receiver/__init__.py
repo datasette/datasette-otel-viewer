@@ -1,4 +1,4 @@
-"""datasette-otel-receiver: span store + /-/traces viewer + OTLP ingest.
+"""datasette-otel-receiver: span store + /-/otel/traces viewer + OTLP ingest.
 
 Three roles, one SQLite store (see PLAN.md):
 
@@ -6,7 +6,7 @@ Three roles, one SQLite store (see PLAN.md):
   the TracerProvider, installed at import time below (see selfsource.py for
   why both the ownership and the timing are load-bearing).
 - receiver (opt-in): POST /v1/traces OTLP/HTTP ingest, bearer auth.
-- viewer: /-/traces list + waterfall (Svelte, built with Vite and served
+- viewer: /-/otel/traces list + waterfall (Svelte, built with Vite and served
   through datasette-vite), gated by the otel-view action.
 
 Replaces datasette-otel-debugger.

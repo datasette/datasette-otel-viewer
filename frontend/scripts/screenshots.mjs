@@ -25,7 +25,7 @@ import { spawn } from "node:child_process";
 // town 8489, kanban 8493).
 const PORT = Number(process.env.SHOTS_PORT || 8494);
 const BASE = `http://localhost:${PORT}`;
-const TRACES_URL = `${BASE}/-/traces`;
+const TRACES_URL = `${BASE}/-/otel/traces`;
 const INGEST_TOKEN = "shots-token";
 // Fresh scratch store every run (never the repo-root otel.db `just dev` uses).
 const OTEL_DB = join(tmpdir(), "datasette-otel-receiver-shots.db");
