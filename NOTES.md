@@ -88,6 +88,7 @@ order by time_ns desc limit 100
 plugins:
   datasette-otel-receiver:
     self_traces: true          # false: viewer/receiver only
+    self_metrics: true         # false: don't store this instance's own metrics
     ingest_token: $TOKEN       # setting this enables the OTLP endpoint
     # allow_unauthenticated_ingest: true   # dev-only escape hatch
     public_viewer: false       # true: /-/otel/traces without a permission grant
@@ -96,7 +97,7 @@ plugins:
     max_metric_points: 100000  # ...and the oldest metric points beyond this count
     db_name: otel
     db_path: otel.db
-    service_name: datasette    # service.name for self-emitted spans
+    service_name: datasette    # service.name for self-emitted spans and metrics
 ```
 
 ## How self-tracing avoids tracing itself
@@ -119,6 +120,25 @@ Consequences:
 - Self mode relies on Datasette ≥ 1.0a39 running startup and serving on a single
   event loop; on older embedder lifecycles inserts are dropped with a warning
   rather than crashing.
+
+Self metrics (`self_metrics`) do not need that ownership. There is no runaway
+to cut — the store's own writes add one measurement to a series that already
+exists, so a quiet instance exports the same handful of points every minute —
+but points about the `otel` database describe the store rather than anything
+the operator asked about, so they are dropped at export time.
+
+Readers can join an SDK `MeterProvider` after it is built (`add_metric_reader`,
+verified on opentelemetry-sdk 1.44), so unlike spans this plugin does not have
+to win the provider race: if another plugin or the `opentelemetry-instrument`
+agent installed one first, it attaches its reader to that provider and keeps
+capturing, and only a provider that cannot take a reader makes self metrics
+disable themselves with a stderr notice. `self_metrics: false` is the off
+switch either way. In the other import order a sibling joins this plugin's
+provider instead — `selfmetrics.add_metric_reader(reader)`, or
+`add_metric_reader` on `opentelemetry.metrics.get_meter_provider()` — which is
+what `datasette-otel-prometheus` needs to serve the same measurements in
+Prometheus text format. Note that plugin's default path collides with this
+viewer's `/-/otel/metrics` page; set its `path` option.
 
 ## Viewer
 

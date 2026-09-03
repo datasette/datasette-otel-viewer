@@ -4,7 +4,8 @@ Three roles, one SQLite store (see PLAN.md):
 
 - self (default on): store the spans this instance emits — requires owning
   the TracerProvider, installed at import time below (see selfsource.py for
-  why both the ownership and the timing are load-bearing).
+  why both the ownership and the timing are load-bearing). Metrics ride the
+  same ownership rule in selfmetrics.py.
 - receiver (opt-in): POST /v1/traces OTLP/HTTP ingest, bearer auth.
 - viewer: /-/otel/traces list + waterfall (Svelte, built with Vite and served
   through datasette-vite), gated by the otel-view action.
@@ -17,7 +18,7 @@ import asyncio
 from datasette import hookimpl
 from datasette_vite import vite_entry
 
-from . import ingest, selfsource, store
+from . import ingest, selfmetrics, selfsource, store
 from .permissions import (  # noqa: F401  (re-exported for pluggy's scan)
     permission_resources_sql,
     register_actions,
@@ -32,13 +33,16 @@ _ = (api, pages)
 # Provider install must happen at import: plugins load before
 # invoke_startup(), and the datasette.startup span starts before any hook.
 selfsource.install()
+selfmetrics.install()
 
 
 @hookimpl
 def startup(datasette):
     async def inner():
         await store.ensure_db(datasette)
-        selfsource.configure(datasette, asyncio.get_running_loop())
+        loop = asyncio.get_running_loop()
+        selfsource.configure(datasette, loop)
+        selfmetrics.configure(datasette, loop)
 
     return inner
 
