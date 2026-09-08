@@ -53,6 +53,7 @@ export default defineConfig({
     emptyOutDir: false,
     rollupOptions: {
       input: {
+        index: "src/pages/index/index.ts",
         traces_list: "src/pages/traces_list/index.ts",
         trace_detail: "src/pages/trace_detail/index.ts",
         metrics_list: "src/pages/metrics_list/index.ts",

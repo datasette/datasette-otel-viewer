@@ -96,6 +96,30 @@ async def list_services(datasette) -> list[str]:
     return [r["service_name"] for r in result.rows]
 
 
+async def store_summary(datasette) -> dict:
+    """Row counts for the four store tables plus the union of service names
+    seen in traces and metrics; feeds the /-/otel landing page."""
+    db = datasette.get_database(store.db_name(datasette))
+    counts = (
+        await db.execute(
+            "select "
+            "(select count(*) from traces) as trace_count, "
+            "(select count(*) from spans) as span_count, "
+            "(select count(*) from metrics) as metric_count, "
+            "(select count(*) from metric_points) as metric_point_count"
+        )
+    ).first()
+    services = await db.execute(
+        "select service_name from traces where service_name is not null "
+        "union select service_name from metric_points "
+        "where service_name is not null order by 1 limit 200"
+    )
+    return {
+        **dict(counts),
+        "services": [r["service_name"] for r in services.rows],
+    }
+
+
 def _row_to_span(r) -> SpanRow:
     d = dict(r)
     d["attributes"] = json.loads(d.get("attributes") or "{}")

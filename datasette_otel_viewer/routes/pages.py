@@ -10,6 +10,7 @@ from ..page_data import (
     MetricDetailPageData,
     MetricsListPageData,
     MetricsListQuery,
+    OtelIndexPageData,
     TraceDetailPageData,
     TracesListPageData,
     TracesQuery,
@@ -30,6 +31,22 @@ async def _render(datasette, request, *, title, entrypoint, page_data):
             },
             request=request,
         )
+    )
+
+
+@router.GET(r"^/-/otel/?$")
+@check_viewer()
+async def index_page(datasette, request):
+    page_data = OtelIndexPageData(
+        **await queries.store_summary(datasette),
+        database=store.db_name(datasette),
+    )
+    return await _render(
+        datasette,
+        request,
+        title="OpenTelemetry",
+        entrypoint="src/pages/index/index.ts",
+        page_data=page_data,
     )
 
 

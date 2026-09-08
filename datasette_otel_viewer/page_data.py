@@ -195,6 +195,19 @@ class MetricsQueryResponse(BaseModel):
     truncated: bool = False
 
 
+class OtelIndexPageData(BaseModel):
+    """Embedded by ``GET /-/otel``: the landing page that points at the
+    traces and metrics viewers, with a few counts so it doubles as a quick
+    "is anything being recorded?" check."""
+
+    trace_count: int
+    span_count: int
+    metric_count: int
+    metric_point_count: int
+    services: list[str]
+    database: str
+
+
 class MetricsListPageData(BaseModel):
     "Embedded by ``GET /-/otel/metrics``."
 
@@ -215,6 +228,7 @@ class MetricDetailPageData(BaseModel):
 
 
 __exports__ = [
+    OtelIndexPageData,
     TracesListPageData,
     TraceDetailPageData,
     MetricsListPageData,

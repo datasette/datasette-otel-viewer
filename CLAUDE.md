@@ -2,7 +2,7 @@
 
 Browse the OpenTelemetry traces and metrics a Datasette instance emits, from
 inside that instance: a self-recording span and metric store plus the
-`/-/otel/traces` and `/-/otel/metrics` viewer. Nothing else can write into the
+`/-/otel` viewer (`/traces`, `/metrics`). Nothing else can write into the
 store over HTTP. Product notes, privacy posture and config reference live in
 `NOTES.md`; this file is the map for working on the code.
 
@@ -45,7 +45,7 @@ datasette_otel_viewer/
 ├── router.py                # Shared Router + check_viewer() decorator
 ├── page_data.py             # Pydantic models: page data + API request/response
 ├── queries.py               # Read-side SQL shared by pages and API
-├── routes/pages.py          # GET /-/otel/traces, GET /-/otel/traces/{trace_id} (HTML)
+├── routes/pages.py          # GET /-/otel (index), /traces, /traces/{trace_id}, /metrics, /metrics/{name} (HTML)
 ├── routes/api.py            # POST /-/otel/api/traces/list, GET /-/otel/api/traces/{trace_id}
 ├── selfsource.py            # TracerProvider ownership + suppression sampler
 ├── selfmetrics.py           # MeterProvider ownership/attach + SDK metrics → rows
@@ -55,6 +55,7 @@ datasette_otel_viewer/
 ├── static/gen/, manifest.json          # Built by Vite (gitignored)
 
 frontend/src/
+├── pages/index/             # /-/otel landing page (IndexPage.svelte): counts + links
 ├── pages/traces_list/       # List page (TracesListPage.svelte)
 ├── pages/trace_detail/      # Waterfall + inspector (TraceDetailPage, WaterfallRow)
 ├── pages/metrics_list/      # Metrics table

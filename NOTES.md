@@ -6,7 +6,8 @@ inside that instance. One plugin, two roles, one SQLite database:
 - **Self-recording** (on by default): every span and metric point this
   Datasette emits is stored in a `traces`/`spans` + `metrics`/`metric_points`
   database served by the same instance.
-- **Viewer**: `/-/otel/traces` lists recent traces, each linking to a waterfall
+- **Viewer**: `/-/otel` is the landing page (store counts, links);
+  `/-/otel/traces` lists recent traces, each linking to a waterfall
   at `/-/otel/traces/<trace_id>`; `/-/otel/metrics` charts the stored metrics.
   The raw tables are regular Datasette tables — facets, JSON API and SQL come
   free.
@@ -163,8 +164,8 @@ uv sync && npm install --prefix frontend
 just types          # Python → TypeScript (OpenAPI + page-data schemas)
 just frontend       # build the bundle into the package
 just test           # datasette from the otel branch via the uv source override
-just dev            # self mode on :8012 (--root; open /-/otel/traces)
-just demo           # self mode on :8003 (--root; open /-/otel/traces)
+just dev            # self mode on :8012 (--root; open /-/otel)
+just demo           # self mode on :8003 (--root; open /-/otel)
 just shots          # regenerate docs/screenshots/*.png (used above)
 ```
 
