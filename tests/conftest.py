@@ -87,7 +87,8 @@ async def make_ds(tmp_path):
     "Factory: a started Datasette with the plugin configured into tmp_path."
     made = []
 
-    async def _make(**plugin_config):
+    async def _make(permissions=None, **plugin_config):
+        "``permissions`` is Datasette's top-level ``permissions:`` config block."
         from datasette.app import Datasette
 
         plugin_config.setdefault("db_path", str(tmp_path / "otel.db"))
@@ -95,6 +96,7 @@ async def make_ds(tmp_path):
             [],
             memory=True,
             config={
+                "permissions": permissions or {},
                 "plugins": {
                     "datasette-otel-viewer": plugin_config,
                     # Vite dev mode: page routes emit dev-server script tags
@@ -103,7 +105,7 @@ async def make_ds(tmp_path):
                     "datasette-vite": {
                         "dev_paths": {"datasette_otel_viewer": "http://localhost:5186/"}
                     },
-                }
+                },
             },
         )
         await ds.invoke_startup()

@@ -1,4 +1,4 @@
-"""Register the ``otel-view`` Action and make the ``otel`` database private
+"""Register the ``datasette-otel-viewer`` Action and make the ``otel`` database private
 by default.
 
 Per ``plan.md`` "Read side: permissions": the spans database holds
@@ -10,12 +10,12 @@ returned by the ``datasette`` entry point, not its submodules -- can find
 them; see ``datasette-places``/``datasette-paper`` for the same split):
 
 ``register_actions()``
-    Registers a single new-style ``otel-view`` Action. ``Action`` (imported
+    Registers a single new-style ``datasette-otel-viewer`` Action. ``Action`` (imported
     from ``datasette.permissions``, as instructed) is a frozen, kw_only
     dataclass on the installed ``datasette==1.0a37``
     (``datasette/permissions.py:161``) with fields ``name``, ``description``,
     ``abbr=None``, ``resource_class=None``, ``also_requires=None``.
-    ``otel-view`` is a plain *global* action (no ``resource_class``): a
+    ``datasette-otel-viewer`` is a plain *global* action (no ``resource_class``): a
     single grant covers the whole ``otel`` database, there's no need to
     grant view access table-by-table.
 
@@ -30,8 +30,8 @@ them; see ``datasette-places``/``datasette-paper`` for the same split):
     ``view-row``/row-level action on this release -- row-level access to
     the ``spans`` table is already fully covered by ``view-table``.
 
-    For each of those actions, if the actor already holds ``otel-view``
-    (checked via ``await datasette.allowed(action="otel-view",
+    For each of those actions, if the actor already holds ``datasette-otel-viewer``
+    (checked via ``await datasette.allowed(action="datasette-otel-viewer",
     actor=actor)`` -- see the divergence note below), this hook returns
     ``None`` (no opinion; normal rules apply). Otherwise it returns a single
     ``PermissionSQL`` row denying access, **scoped to the configured otel
@@ -71,7 +71,7 @@ already documented such a split):
   ``default_permissions.root_user_permissions_sql`` grants the root actor a
   blanket allow for *any* action it's asked about -- it doesn't even
   inspect the ``action`` argument -- so root already satisfies our internal
-  ``otel-view`` check above and this hook steps out of the way for root on
+  ``datasette-otel-viewer`` check above and this hook steps out of the way for root on
   its own. Tested in ``tests/test_permissions.py`` by setting
   ``ds.root_enabled = True`` directly (what the ``--root`` CLI flag does at
   runtime, per ``datasette/cli.py``) with an actor id of ``"root"``.
@@ -83,21 +83,21 @@ already documented such a split):
   ``DEFAULT_ALLOW_ACTIONS``. So it 403s for ordinary actors and only
   succeeds for root (or an actor explicitly granted
   ``permissions-debug``). Tests exercise both: a direct check of
-  ``datasette.actions["otel-view"]`` (always available after startup) and
+  ``datasette.actions["datasette-otel-viewer"]`` (always available after startup) and
   an HTTP round-trip against ``/-/actions.json`` as root.
 
 Operator grant story (also exercised in tests/test_permissions.py):
 
-- Standard config grant, e.g. CLI ``-s permissions.otel-view '{"id":
+- Standard config grant, e.g. CLI ``-s permissions.datasette-otel-viewer '{"id":
   "admin"}'`` (which Datasette's ``pairs_to_nested_config`` turns into a
-  top-level ``config["permissions"]["otel-view"] = {"id": "admin"}``,
-  identical to a ``permissions: {otel-view: {id: admin}}`` block in
+  top-level ``config["permissions"]["datasette-otel-viewer"] = {"id": "admin"}``,
+  identical to a ``permissions: {datasette-otel-viewer: {id: admin}}`` block in
   datasette.yaml) -- handled entirely by core's
   ``default_permissions.config_permissions_sql``; no plugin code needed
   beyond registering the Action.
 - ``--root``: also works with zero extra plugin code, as described above.
 - Nothing writes into the store over HTTP: this plugin only records the
-  telemetry this instance emits, so ``otel-view`` is the whole permission
+  telemetry this instance emits, so ``datasette-otel-viewer`` is the whole permission
   surface and this hook only intercedes for the read actions listed above.
 """
 
@@ -109,7 +109,10 @@ from datasette.permissions import Action, PermissionSQL
 from . import store
 from .store import PLUGIN_NAME
 
-VIEW_ACTION_NAME = "otel-view"
+# Named after the plugin, like the sibling plugins' actions
+# (datasette-aforms-list, datasette-sidebar-access, ...): grant it with
+# `-s permissions.datasette-otel-viewer.id clark` or a `permissions:` block.
+VIEW_ACTION_NAME = "datasette-otel-viewer"
 
 # The read actions that expose the otel database's contents, verified
 # against datasette/default_actions.py on the installed datasette==1.0a37
@@ -128,7 +131,7 @@ VIEW_ACTION_NAME = "otel-view"
 # also in `default_permissions.defaults.DEFAULT_ALLOW_ACTIONS`, so without
 # this addition every canned query -- including ones surfacing
 # `db_query_text` -- would be publicly readable by default regardless of
-# the `otel-view` grant, contradicting plan.md's "private by default"
+# the `datasette-otel-viewer` grant, contradicting plan.md's "private by default"
 # requirement. The existing deny row (child=NULL, scoped to `parent =
 # db_name`) already covers this correctly: resolution is by the *rule's*
 # parent/child specificity, not the resource's own shape (this is the same
@@ -160,7 +163,7 @@ def register_actions():
     return [
         Action(
             name=VIEW_ACTION_NAME,
-            description="View captured OpenTelemetry spans",
+            description="View the OpenTelemetry traces and metrics this instance records",
         )
     ]
 
@@ -173,7 +176,7 @@ async def permission_resources_sql(datasette, actor, action):
         return None
 
     if await datasette.allowed(action=VIEW_ACTION_NAME, actor=actor):
-        # Actor already holds otel-view (via config grant, root, or any
+        # Actor already holds datasette-otel-viewer (via config grant, root, or any
         # other plugin) -- no opinion, let normal rules decide.
         return None
 

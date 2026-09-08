@@ -92,11 +92,17 @@ test-all:
 demo-db:
     @[ -e demo.db ] || sqlite3 demo.db "create table plants(id integer primary key, name text, height_cm real); with recursive n(i) as (select 1 union all select i + 1 from n where i < 200) insert into plants select i, 'plant ' || i, abs(random() % 300) from n;"
 
-# Self mode against demo.db (--root; viewer public). Serves the built bundle:
-# run `just frontend` first, or use dev-with-hmr.
+# Self mode against demo.db. Serves the built bundle: run `just frontend`
+# first, or use dev-with-hmr.
+#
+# Permissions are exercised for real: datasette-debug-gotham adds an actor
+# switcher to the debug bar, and only `clark` (plus --root) is granted the
+# datasette-otel-viewer action. Pick Clark Kent to see /-/otel, anyone else
+# to get the 403.
 dev *options: demo-db
-    DATASETTE_SECRET=abc123 uv run datasette demo.db --root \
-        -s plugins.datasette-otel-viewer.public_viewer true \
+    DATASETTE_SECRET=abc123 uv run --with datasette-debug-gotham \
+        datasette demo.db --root \
+        -s permissions.datasette-otel-viewer.id clark \
         -p {{DEV_HTTP_PORT}} {{ options }}
 
 # `dev` + Vite HMR: page routes load assets from `just frontend-dev` (other

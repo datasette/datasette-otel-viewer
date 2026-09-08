@@ -21,7 +21,7 @@ store over HTTP. Product notes, privacy posture and config reference live in
 
 | Command | What it does |
 |---------|-------------|
-| `just dev` | Datasette on :8012 against `demo.db` (`--root`, viewer public); serves the built bundle |
+| `just dev` | Datasette on :8012 against `demo.db` with datasette-debug-gotham; only `clark` (and `--root`) holds `datasette-otel-viewer`; serves the built bundle |
 | `just dev-with-hmr` | `dev` + Vite HMR via datasette-vite `dev_paths`; restarts on .py/.html changes |
 | `just frontend-dev` | Vite dev server on :5186 (pair with `dev-with-hmr`) |
 | `just frontend` | Production build → `datasette_otel_viewer/static/gen/` + `manifest.json` |
@@ -50,7 +50,7 @@ datasette_otel_viewer/
 ├── selfsource.py            # TracerProvider ownership + suppression sampler
 ├── selfmetrics.py           # MeterProvider ownership/attach + SDK metrics → rows
 ├── store.py                 # Schema, batch insert, retention
-├── permissions.py           # otel-view action; raw tables private by default
+├── permissions.py           # datasette-otel-viewer action; raw tables private by default
 ├── templates/otel_viewer_base.html   # The single template
 ├── static/gen/, manifest.json          # Built by Vite (gitignored)
 
@@ -93,7 +93,7 @@ the real `Annotated[..., Body()]` objects at decoration time.
 
 ## Permissions
 
-- `otel-view` (global action) gates the viewer pages, the JSON API and the
+- `datasette-otel-viewer` (global action, same name as the plugin) gates the viewer pages, the JSON API and the
   raw `otel` tables. `public_viewer: true` opens pages + API only; the raw
   tables stay gated (`permissions.py` emits a database-scoped deny row).
 - `check_viewer()` in `router.py` returns a plain-text 403, preserving the

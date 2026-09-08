@@ -22,7 +22,7 @@ router = Router(title="datasette-otel-viewer", version="0.1.0")
 async def viewer_allowed(datasette, actor) -> bool:
     """True when the viewer pages/API may be shown to ``actor``: either the
     operator opened the viewer with ``public_viewer: true`` or the actor
-    holds ``otel-view``. The raw tables stay gated regardless (see
+    holds ``datasette-otel-viewer``. The raw tables stay gated regardless (see
     permissions.py)."""
     config = datasette.plugin_config(store.PLUGIN_NAME) or {}
     if config.get("public_viewer") is True:
@@ -31,7 +31,7 @@ async def viewer_allowed(datasette, actor) -> bool:
 
 
 FORBIDDEN_TEXT = (
-    "Forbidden: viewing traces requires the otel-view permission "
+    f"Forbidden: viewing traces requires the {VIEW_ACTION_NAME} permission "
     "(or public_viewer: true in this plugin's config)"
 )
 

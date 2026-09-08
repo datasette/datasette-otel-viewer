@@ -25,7 +25,7 @@ branches (phase 1); no released Datasette emits these spans yet.
 **The span store contains `db.query.text`: on a public instance that is
 user-supplied SQL, with literals.** It also holds URL paths and other request
 attributes. Because of that the store and viewer are **private by default**:
-reading them requires the `otel-view` permission (grant it via standard
+reading them requires the `datasette-otel-viewer` permission (grant it via standard
 Datasette permissions config, or use `--root`). `public_viewer: true` opens the
 `/-/otel/traces` pages only — the raw tables stay gated. SQL parameter *values* are
 never recorded by Datasette core, only parameter counts.
@@ -134,7 +134,7 @@ The pages are Svelte 5 + TypeScript, built with Vite and served through
 - `POST /-/otel/api/traces/list` with `{"limit": 100, "service": "datasette"}`
 - `GET /-/otel/api/traces/<trace_id>`
 
-Gated exactly like the pages (`otel-view`, or `public_viewer: true`).
+Gated exactly like the pages (`datasette-otel-viewer`, or `public_viewer: true`).
 
 ### Metrics pages
 
@@ -164,8 +164,8 @@ uv sync && npm install --prefix frontend
 just types          # Python → TypeScript (OpenAPI + page-data schemas)
 just frontend       # build the bundle into the package
 just test           # datasette from the otel branch via the uv source override
-just dev            # self mode on :8012 (--root; open /-/otel)
-just demo           # self mode on :8003 (--root; open /-/otel)
+just dev            # self mode on :8012; pick Clark Kent in the debug bar, open /-/otel
+just demo           # self mode on :8003 (viewer public; open /-/otel)
 just shots          # regenerate docs/screenshots/*.png (used above)
 ```
 

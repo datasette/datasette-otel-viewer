@@ -7,7 +7,7 @@ Two roles, one SQLite store (see PLAN.md):
   why both the ownership and the timing are load-bearing). Metrics ride the
   same ownership rule in selfmetrics.py.
 - viewer: /-/otel/traces list + waterfall (Svelte, built with Vite and served
-  through datasette-vite), gated by the otel-view action.
+  through datasette-vite), gated by the datasette-otel-viewer action.
 
 Replaces datasette-otel-debugger.
 """

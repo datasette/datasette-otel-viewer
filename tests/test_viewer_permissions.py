@@ -7,6 +7,7 @@ import pytest
 from conftest import drain, page_data
 
 from datasette_otel_viewer import store
+from datasette_otel_viewer.permissions import VIEW_ACTION_NAME
 
 TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
 SPAN_ID = "b7ad6b7169203331"
@@ -162,6 +163,28 @@ async def test_raw_tables_denied_anonymously_even_with_public_viewer(make_ds):
     await seed(ds)
     response = await ds.client.get("/otel/spans.json")
     assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_config_grant_by_actor_id(make_ds):
+    """The `just dev` setup: `permissions.datasette-otel-viewer.id clark`
+    lets clark (a datasette-debug-gotham actor) into the pages, the API and
+    the raw tables; every other actor and anonymous get the 403."""
+    assert VIEW_ACTION_NAME == "datasette-otel-viewer"
+    ds = await make_ds(permissions={"datasette-otel-viewer": {"id": "clark"}})
+    await seed(ds)
+    clark = {"ds_actor": ds.client.actor_cookie({"id": "clark"})}
+    lois = {"ds_actor": ds.client.actor_cookie({"id": "lois"})}
+    for path in ("/-/otel", "/-/otel/traces", "/-/otel/metrics", "/otel/spans.json"):
+        assert (await ds.client.get(path, cookies=clark)).status_code == 200, path
+        assert (await ds.client.get(path, cookies=lois)).status_code == 403, path
+        assert (await ds.client.get(path)).status_code == 403, path
+    assert (
+        await ds.client.post("/-/otel/api/traces/list", json={}, cookies=clark)
+    ).status_code == 200
+    assert (
+        await ds.client.post("/-/otel/api/traces/list", json={}, cookies=lois)
+    ).status_code == 403
 
 
 @pytest.mark.asyncio
