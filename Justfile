@@ -99,8 +99,15 @@ demo-db:
 # switcher to the debug bar, and only `clark` (plus --root) is granted the
 # datasette-otel-viewer action. Pick Clark Kent to see /-/otel, anyone else
 # to get the 403.
+#
+# It comes from the `devserver` dependency group, NOT from `uv run --with`:
+# the ephemeral overlay environment --with builds resolves datasette from
+# PyPI instead of the [tool.uv.sources] git pin, and released datasette emits
+# no spans -- the dev instance then sits there recording nothing at all (same
+# version number, no warning). Switching between `just dev` and `just test`
+# re-syncs the environment; that is uv keeping the group out of the tests.
 dev *options: demo-db
-    DATASETTE_SECRET=abc123 uv run --with datasette-debug-gotham \
+    DATASETTE_SECRET=abc123 uv run --group devserver \
         datasette demo.db --root \
         -s permissions.datasette-otel-viewer.id clark \
         -p {{DEV_HTTP_PORT}} {{ options }}
