@@ -70,7 +70,12 @@ class SuppressingSampler(Sampler):
     ):
         if otel_context.get_value(store.SUPPRESS_KEY, context=parent_context):
             return SamplingResult(Decision.DROP)
-        return SamplingResult(Decision.RECORD_AND_SAMPLE)
+        # Hand the creation-time attributes back: the SDK takes a span's
+        # initial attributes from the SamplingResult, so returning a bare
+        # decision silently discards everything passed to start_span(
+        # attributes=...). Core sets attributes after start and never
+        # noticed; sibling plugins passing them at creation lost them all.
+        return SamplingResult(Decision.RECORD_AND_SAMPLE, attributes=attributes)
 
     def get_description(self):
         return "SuppressingSampler"

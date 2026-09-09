@@ -3,6 +3,7 @@ startup trace, and - the load-bearing assertion - does NOT feed back on
 itself."""
 
 import asyncio
+import json
 
 import pytest
 from conftest import drain, raw_span_rows, reset_tracer_state
@@ -21,6 +22,29 @@ async def test_request_spans_land_in_store(make_ds, tmp_path):
     assert any(name.startswith("GET ") for name in names)
     # The startup trace is captured too (buffered from import until armed).
     assert "datasette.startup" in names
+
+
+@pytest.mark.asyncio
+async def test_creation_time_attributes_are_stored(make_ds, tmp_path):
+    """Attributes passed to start_span(attributes=...) must survive the
+    SuppressingSampler - the SDK takes a span's initial attributes from the
+    SamplingResult, so a sampler that returns a bare decision drops them."""
+    from opentelemetry import trace
+
+    await make_ds(public_viewer=True)  # arms the store
+    tracer = trace.get_tracer("attribute-test")
+    with tracer.start_as_current_span(
+        "with-initial-attributes", attributes={"at.start": "kept"}
+    ) as span:
+        span.set_attribute("after.start", "kept too")
+    await drain()
+
+    (attributes,) = [
+        json.loads(row[2])
+        for row in raw_span_rows(tmp_path / "otel.db")
+        if row[1] == "with-initial-attributes"
+    ]
+    assert attributes == {"at.start": "kept", "after.start": "kept too"}
 
 
 @pytest.mark.asyncio
