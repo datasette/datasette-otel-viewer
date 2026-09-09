@@ -128,6 +128,10 @@ viewer's `/-/otel/metrics` page; set its `path` option.
 
 ![Trace waterfall with the span inspector open](docs/screenshots/trace.png)
 
+Datasette's own menu carries one entry — **OpenTelemetry**, pointing at
+`/-/otel` — shown only to actors who may use the viewer, so nobody is offered
+a link that answers 403.
+
 The pages are Svelte 5 + TypeScript, built with Vite and served through
 [datasette-vite]. Both are backed by a JSON API with the same shapes:
 

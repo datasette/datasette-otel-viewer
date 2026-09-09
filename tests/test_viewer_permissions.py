@@ -334,6 +334,32 @@ async def test_viewer_private_by_default(make_ds):
 
 
 @pytest.mark.asyncio
+async def test_menu_link_follows_the_viewer_permission(make_ds):
+    """The one entry this plugin adds to Datasette's own menu. It is gated
+    like the pages: an actor who would only get the 403 is never shown it."""
+    from datasette_otel_viewer import menu_links
+
+    async def links(ds, actor=None):
+        return await menu_links(datasette=ds, actor=actor)()
+
+    private = await make_ds()
+    assert await links(private) == []
+    assert await links(private, {"id": "lois"}) == []
+
+    public = await make_ds(public_viewer=True)
+    assert await links(public) == [{"href": "/-/otel", "label": "OpenTelemetry"}]
+
+    granted = await make_ds(permissions={"datasette-otel-viewer": {"id": "clark"}})
+    assert await links(granted, {"id": "clark"})
+    assert await links(granted, {"id": "lois"}) == []
+
+    # ...and it reaches the rendered page, not just the hook.
+    page = await public.client.get("/")
+    assert '<a href="/-/otel">OpenTelemetry</a>' in page.text
+    assert "OpenTelemetry" not in (await private.client.get("/")).text
+
+
+@pytest.mark.asyncio
 async def test_raw_tables_denied_anonymously_even_with_public_viewer(make_ds):
     ds = await make_ds(public_viewer=True)
     await seed(ds)
