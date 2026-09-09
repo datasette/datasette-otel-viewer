@@ -33,7 +33,9 @@ otel_viewer = "datasette_otel_viewer"
 dev = ["pytest", "pytest-asyncio", "ruff>=0.15.0"]
 # `just dev` only, hence a non-default group: datasette-debug-gotham (and the
 # debug bar it pulls in) inject themselves into every page Datasette renders,
-# which the test suite has no business seeing. It is a group rather than a
+# which the test suite and the doc screenshots have no business seeing. A
+# plain `uv run` leaves an already-installed group in place, so the recipes
+# that need a clean environment pass --exact. It is a group rather than a
 # `uv run --with`, though -- an ephemeral --with overlay resolves datasette
 # from PyPI, ignoring the [tool.uv.sources] git pin below, and released
 # datasette emits no OpenTelemetry spans, so the dev instance would sit there

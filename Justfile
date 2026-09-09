@@ -75,9 +75,12 @@ check:
 
 # === Tests ===
 
-# Python tests (page routes run in vite dev mode, so no frontend build needed)
+# Python tests (page routes run in vite dev mode, so no frontend build needed).
+# --exact: `just dev` installs the devserver group into the same environment
+# and a plain `uv run` would leave it there, loading datasette-debug-gotham
+# (and the debug bar) into every Datasette the suite builds.
 test *options:
-    uv run pytest {{ options }}
+    uv run --exact pytest {{ options }}
 
 test-frontend *flags:
     npm test --prefix frontend {{flags}}
@@ -101,6 +104,8 @@ demo-db:
 # to get the 403.
 #
 # It comes from the `devserver` dependency group, NOT from `uv run --with`:
+# note that a plain `uv run` does not uninstall it afterwards, which is why
+# `test`, `demo` and the screenshot harness all pass --exact.
 # the ephemeral overlay environment --with builds resolves datasette from
 # PyPI instead of the [tool.uv.sources] git pin, and released datasette emits
 # no spans -- the dev instance then sits there recording nothing at all (same
@@ -125,7 +130,7 @@ dev-with-hmr *options:
 
 # Self mode demo: browse the instance, then open http://localhost:8003/-/otel/traces
 demo *options: demo-db frontend
-    uv run datasette demo.db --root \
+    uv run --exact datasette demo.db --root \
         -s plugins.datasette-otel-viewer.public_viewer true \
         -p 8003 {{ options }}
 

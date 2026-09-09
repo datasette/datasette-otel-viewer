@@ -71,6 +71,10 @@ async function startServer() {
     "uv",
     [
       "run",
+      // --exact: `just dev` installs the devserver group (datasette-debug-
+      // gotham + the debug bar) into this same environment, and a plain
+      // `uv run` leaves it there -- their widgets would land in the shots.
+      "--exact",
       "datasette",
       "--memory",
       "-p",
