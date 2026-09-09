@@ -117,6 +117,13 @@ the real `Annotated[..., Body()]` objects at decoration time.
   never recorded; see `selfsource.py` before touching the write path.
   `selfmetrics.py` drops metric points whose `db.namespace` is the otel
   database for the same reason.
+- The traces list sorts and pages in SQL, under Datasette's own querystring
+  names (`?_sort`/`?_sort_desc`/`?_size`/`?_next` on the page, the same
+  fields on `TracesQuery` for the API). The sortable-column allowlist is
+  `page_data.TRACE_SORT_COLUMNS`; the SQL behind each name is
+  `queries.TRACE_ORDER_BY`, and a module-level assert keeps the two in sync.
+  `lib/sort.ts`'s `sortRows` is now the metrics catalogue's only (it fits in
+  one response); the traces page uses `nextSort` for header state alone.
 - `metrics_math.py` and `frontend/src/lib/metricsMath.ts` must stay in sync;
   both test files assert the same vectors.
 - The metrics planning package (research, decision log, tickets) is in

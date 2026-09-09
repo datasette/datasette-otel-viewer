@@ -26,8 +26,8 @@ from ..router import check_viewer, router
 @router.POST(r"^/-/otel/api/traces/list$", output=TracesListResponse)
 @check_viewer()
 async def api_traces_list(datasette, request, body: Annotated[TracesQuery, Body()]):
-    traces = await queries.list_traces(datasette, body)
-    return Response.json(TracesListResponse(traces=traces).model_dump())
+    listed = await queries.list_traces(datasette, body)
+    return Response.json(listed.model_dump())
 
 
 @router.GET(r"^/-/otel/api/traces/(?P<trace_id>[0-9a-f]{32})$", output=TraceDetail)

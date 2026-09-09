@@ -50,7 +50,9 @@ async def test_viewer_list_and_waterfall(make_ds):
     assert "src/pages/traces_list/index.ts" in listing.text
     data = page_data(listing.text)
     assert data["database"] == "otel"
-    assert data["limit"] == 100
+    assert data["query"]["size"] == 100
+    assert data["total"] == 1
+    assert data["next"] is None
     assert "datasette" in data["services"]
     trace = next(t for t in data["traces"] if t["trace_id"] == TRACE_ID)
     assert trace["service_name"] == "datasette"
@@ -70,7 +72,7 @@ async def test_viewer_list_and_waterfall(make_ds):
 async def test_json_api_matches_page_data(make_ds):
     ds = await make_ds(public_viewer=True)
     await seed(ds)
-    listed = await ds.client.post("/-/otel/api/traces/list", json={"limit": 10})
+    listed = await ds.client.post("/-/otel/api/traces/list", json={"size": 10})
     assert listed.status_code == 200
     rows = listed.json()["traces"]
     assert [t["trace_id"] for t in rows] == [
@@ -92,13 +94,132 @@ async def test_json_api_filters_and_validates(make_ds):
     hit = await ds.client.post("/-/otel/api/traces/list", json={"service": "datasette"})
     assert [t["trace_id"] for t in hit.json()["traces"]] == [TRACE_ID]
     miss = await ds.client.post("/-/otel/api/traces/list", json={"service": "nope"})
-    assert miss.json() == {"traces": []}
-    # Pydantic validation: limit is capped, malformed bodies are 400s.
-    too_big = await ds.client.post("/-/otel/api/traces/list", json={"limit": 10_000})
+    assert miss.json()["traces"] == []
+    assert miss.json()["total"] == 0
+    # Pydantic validation: size is capped, the sort column is an allowlist,
+    # malformed bodies are 400s.
+    too_big = await ds.client.post("/-/otel/api/traces/list", json={"size": 10_000})
     assert too_big.status_code == 400
-    assert "limit" in too_big.json()["error"]
+    assert "size" in too_big.json()["error"]
+    bad_sort = await ds.client.post(
+        "/-/otel/api/traces/list", json={"sort": "db_query_text"}
+    )
+    assert bad_sort.status_code == 400
+    assert "cannot sort traces by db_query_text" in bad_sort.json()["error"]
+    both = await ds.client.post(
+        "/-/otel/api/traces/list", json={"sort": "start_ns", "sort_desc": "start_ns"}
+    )
+    assert both.status_code == 400
     missing = await ds.client.get("/-/otel/api/traces/" + "0" * 32)
     assert missing.status_code == 404
+
+
+async def seed_many(ds, count, service="datasette"):
+    """`count` single-span traces, each slower and newer than the last, so
+    every sortable column has a distinct known order."""
+    rows = []
+    for i in range(count):
+        start = START_NS + i * 1_000_000_000
+        rows.append(
+            span_row(
+                trace_id=f"{i:032x}",
+                span_id=f"{i:016x}",
+                name=f"span-{i}",
+                service_name=service,
+                start_ns=start,
+                end_ns=start + (i + 1) * 1_000_000,
+                duration_ms=(i + 1) * 1.0,
+            )
+        )
+    await store.insert_spans(ds, rows)
+
+
+@pytest.mark.asyncio
+async def test_sorting_happens_in_sql_over_the_whole_table(make_ds):
+    """The point of server-side ordering: the slowest trace overall leads
+    the duration sort even though it is not in the newest-first first page."""
+    ds = await make_ds(public_viewer=True)
+    await seed_many(ds, 12)
+
+    async def listed(**body):
+        response = await ds.client.post("/-/otel/api/traces/list", json=body)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    newest = await listed(size=5)
+    assert [t["label"] for t in newest["traces"]] == [
+        f"span-{i}" for i in (11, 10, 9, 8, 7)
+    ]
+    # Default ordering is start_ns desc, echoed back for the column headers.
+    assert newest["query"]["sort_desc"] == "start_ns"
+    assert newest["total"] == 12
+
+    slowest = await listed(size=5, sort_desc="duration_ms")
+    assert [t["duration_ms"] for t in slowest["traces"]] == [12.0, 11.0, 10.0, 9.0, 8.0]
+    fastest = await listed(size=5, sort="duration_ms")
+    assert [t["duration_ms"] for t in fastest["traces"]] == [1.0, 2.0, 3.0, 4.0, 5.0]
+    by_label = await listed(size=3, sort="label")
+    assert [t["label"] for t in by_label["traces"]] == ["span-0", "span-1", "span-10"]
+
+
+@pytest.mark.asyncio
+async def test_paging_walks_every_trace_once(make_ds):
+    ds = await make_ds(public_viewer=True)
+    await seed_many(ds, 12)
+    seen = []
+    cursor = None
+    for _ in range(10):  # guard against a cursor that never terminates
+        page = (
+            await ds.client.post(
+                "/-/otel/api/traces/list",
+                json={"size": 5, "sort": "duration_ms", "next": cursor},
+            )
+        ).json()
+        assert page["total"] == 12
+        seen.extend(t["trace_id"] for t in page["traces"])
+        cursor = page["next"]
+        if cursor is None:
+            break
+    assert cursor is None
+    assert len(seen) == len(set(seen)) == 12
+    # A cursor is a page-boundary offset, not an arbitrary string.
+    bad = await ds.client.post("/-/otel/api/traces/list", json={"next": "abc"})
+    assert bad.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_page_url_carries_the_query(make_ds):
+    """`/-/otel/traces?_sort_desc=...` renders that page server-side: the
+    embedded blob is the query's answer, so a shared URL loads sorted with
+    no client round trip."""
+    ds = await make_ds(public_viewer=True)
+    await seed_many(ds, 12)
+    data = page_data(
+        (await ds.client.get("/-/otel/traces?_sort=duration_ms&_size=4")).text
+    )
+    assert [t["duration_ms"] for t in data["traces"]] == [1.0, 2.0, 3.0, 4.0]
+    assert data["query"] == {
+        "size": 4,
+        "service": None,
+        "sort": "duration_ms",
+        "sort_desc": None,
+        "next": None,
+    }
+    assert data["next"] == "4"
+    assert data["total"] == 12
+
+    second = page_data(
+        (await ds.client.get("/-/otel/traces?_sort=duration_ms&_size=4&_next=4")).text
+    )
+    assert [t["duration_ms"] for t in second["traces"]] == [5.0, 6.0, 7.0, 8.0]
+
+    filtered = page_data((await ds.client.get("/-/otel/traces?service=nope")).text)
+    assert filtered["traces"] == []
+    assert filtered["query"]["service"] == "nope"
+
+    bad = await ds.client.get("/-/otel/traces?_sort=nope")
+    assert bad.status_code == 400
+    assert "cannot sort traces by nope" in bad.text
 
 
 @pytest.mark.asyncio

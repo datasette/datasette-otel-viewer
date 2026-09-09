@@ -131,8 +131,19 @@ viewer's `/-/otel/metrics` page; set its `path` option.
 The pages are Svelte 5 + TypeScript, built with Vite and served through
 [datasette-vite]. Both are backed by a JSON API with the same shapes:
 
-- `POST /-/otel/api/traces/list` with `{"limit": 100, "service": "datasette"}`
+- `POST /-/otel/api/traces/list` with
+  `{"size": 100, "service": "datasette", "sort_desc": "duration_ms"}`
 - `GET /-/otel/api/traces/<trace_id>`
+
+`/-/otel/traces` is one row per trace, summarised by its root span, and it
+borrows Datasette's querystring vocabulary for the rest:
+`?_sort=`/`?_sort_desc=` (a column of the list: `label`, `service_name`,
+`http_status`, `span_count`, `error_count`, `duration_ms`, `start_ns`,
+`status`), `?_size=` and `?_next=` for paging, `?service=` to filter. Sorting
+and paging happen in SQL over the whole store, so "slowest first" means the
+slowest trace recorded, not the slowest one on screen — and the URL is the
+state, so a sorted, filtered list is a link you can send to someone. An
+unknown sort column is a 400, like Datasette's own.
 
 Gated exactly like the pages (`datasette-otel-viewer`, or `public_viewer: true`).
 

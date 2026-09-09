@@ -1,12 +1,18 @@
 /**
- * Client-side column sorting for the analytics/list tables. Pure functions
- * (no runes) so this stays unit-testable in plain vitest like traceTree;
- * the $state lives in each page component, and SortHeader.svelte renders
- * the clickable <th>s.
+ * Column-sort state (and, for the metrics catalogue, the sort itself). Pure
+ * functions (no runes) so this stays unit-testable in plain vitest like
+ * traceTree; the $state lives in each page component, and
+ * SortHeader.svelte renders the clickable <th>s.
  *
- * Sorting is over the already-loaded rows only -- the traces list caps at
- * 500 rows and the analytics tables at 100 (api.py MAX_LIMIT /
- * DEFAULT_LIMIT), so there is no server-side ordering round trip.
+ * Two different jobs, deliberately:
+ *
+ * - The traces list uses `nextSort` for the state only. Its rows are
+ *   ordered in SQL (page_data.TracesQuery's sort/sort_desc), so "slowest
+ *   first" means the slowest of every stored trace rather than of whichever
+ *   page is loaded.
+ * - The metrics catalogue uses `sortRows` too: it is a whole catalogue in
+ *   one response (queries.list_metrics caps at 500 rows, no paging), so
+ *   sorting the loaded rows sorts everything there is.
  */
 
 export type SortDir = "asc" | "desc";

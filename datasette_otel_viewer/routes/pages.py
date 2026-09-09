@@ -3,10 +3,11 @@ entrypoint and a Pydantic page-data blob; the Svelte page mounts into
 ``#app-root`` and reads the blob (see frontend/src/page_data/load.ts)."""
 
 from datasette import Response
+from pydantic import ValidationError
 
 from .. import queries, store
 from ..page_data import (
-    DEFAULT_LIMIT,
+    DEFAULT_SIZE,
     MetricDetailPageData,
     MetricsListPageData,
     MetricsListQuery,
@@ -50,13 +51,32 @@ async def index_page(datasette, request):
     )
 
 
+def _traces_query(request) -> TracesQuery:
+    """``?_sort_desc=duration_ms&_size=50&_next=50`` -> the TracesQuery the
+    JSON API takes. Datasette's own underscore-prefixed names, on purpose:
+    the list page's URL *is* its state, and it reads like a table page's."""
+    args = request.args
+    return TracesQuery(
+        size=args.get("_size") or DEFAULT_SIZE,
+        service=args.get("service") or None,
+        sort=args.get("_sort") or None,
+        sort_desc=args.get("_sort_desc") or None,
+        next=args.get("_next") or None,
+    )
+
+
 @router.GET(r"^/-/otel/traces$")
 @check_viewer()
 async def traces_list_page(datasette, request):
+    try:
+        query = _traces_query(request)
+    except ValidationError as error:
+        # Same shape as Datasette's own "Cannot sort table by ..." 400.
+        return Response.text(f"Bad traces query: {error}", status=400)
+    listed = await queries.list_traces(datasette, query)
     page_data = TracesListPageData(
-        traces=await queries.list_traces(datasette, TracesQuery(limit=DEFAULT_LIMIT)),
+        **listed.model_dump(),
         services=await queries.list_services(datasette),
-        limit=DEFAULT_LIMIT,
         database=store.db_name(datasette),
     )
     return await _render(

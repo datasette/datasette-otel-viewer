@@ -18,9 +18,26 @@ from pydantic import BaseModel, Field, model_validator
 
 from .metrics_math import NS
 
-DEFAULT_LIMIT = 100
-MAX_LIMIT = 500
+DEFAULT_SIZE = 100
+MAX_SIZE = 500
 SPAN_LIMIT = 5000
+
+# Columns the traces list may be ordered by -- an allowlist, like Datasette's
+# own ?_sort/?_sort_desc: a request naming anything else is a 400 rather than
+# a chance to inject SQL. `queries.TRACE_ORDER_BY` holds the matching SQL and
+# asserts it covers exactly these names.
+TRACE_SORT_COLUMNS = (
+    "label",
+    "service_name",
+    "http_status",
+    "span_count",
+    "error_count",
+    "duration_ms",
+    "start_ns",
+    "status",
+)
+# Newest first, the ordering the list had before it was sortable at all.
+DEFAULT_SORT_DESC = "start_ns"
 
 # Ceilings for the metrics query API: a query reads at most POINT_LIMIT raw
 # points (beyond that the response is flagged truncated), and the range/step
@@ -49,22 +66,64 @@ class TraceRow(BaseModel):
 
 
 class TracesQuery(BaseModel):
-    "Body of ``POST /-/otel/api/traces/list``: filter + page size."
+    """Body of ``POST /-/otel/api/traces/list``: filter, sort, one page.
 
-    limit: int = Field(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT)
+    Deliberately Datasette's own vocabulary -- ``sort``/``sort_desc``/``size``
+    /``next`` are the ``?_sort``/``?_sort_desc``/``?_size``/``?_next`` the
+    table pages use, and ``GET /-/otel/traces`` reads them under those
+    underscored names (see ``routes/pages.py``) so a sorted list is a URL you
+    can paste to someone. Ordering happens in SQL over the whole table, not
+    over the page: "slowest traces" means slowest of all of them."""
+
+    size: int = Field(default=DEFAULT_SIZE, ge=1, le=MAX_SIZE)
     service: str | None = None
+    # At most one of these, and only a TRACE_SORT_COLUMNS name.
+    sort: str | None = None
+    sort_desc: str | None = None
+    # Cursor for the page to return, taken from a previous response's
+    # ``next``. Opaque to the client; an offset underneath (see
+    # queries.list_traces for why offset rather than keyset).
+    next: str | None = None
+
+    @model_validator(mode="after")
+    def _check_sort(self):
+        if self.sort and self.sort_desc:
+            raise ValueError("cannot use sort and sort_desc at the same time")
+        for value in (self.sort, self.sort_desc):
+            if value is not None and value not in TRACE_SORT_COLUMNS:
+                raise ValueError(
+                    "cannot sort traces by {} (sortable: {})".format(
+                        value, ", ".join(TRACE_SORT_COLUMNS)
+                    )
+                )
+        if not self.sort and not self.sort_desc:
+            # Resolve the default here rather than in the SQL, so the query
+            # the API echoes back is the one the headers should light up.
+            self.sort_desc = DEFAULT_SORT_DESC
+        if self.next is not None and not self.next.isdigit():
+            raise ValueError("next must be a cursor from a previous response")
+        return self
+
+    @property
+    def offset(self) -> int:
+        return int(self.next or 0)
 
 
 class TracesListResponse(BaseModel):
+    """One page of traces plus what the pager needs: ``next`` is the cursor
+    for the following page (``None`` on the last one) and ``total`` counts
+    every trace matching the filter, not just this page."""
+
     traces: list[TraceRow]
+    query: TracesQuery
+    next: str | None = None
+    total: int
 
 
-class TracesListPageData(BaseModel):
+class TracesListPageData(TracesListResponse):
     "Embedded by ``GET /-/otel/traces``: first page + the service filter choices."
 
-    traces: list[TraceRow]
     services: list[str]
-    limit: int
     database: str
 
 

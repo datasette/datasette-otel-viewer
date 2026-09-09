@@ -9,6 +9,7 @@ from . import metrics_math, store
 from .page_data import (
     POINT_LIMIT,
     SPAN_LIMIT,
+    TRACE_SORT_COLUMNS,
     MetricsListQuery,
     MetricsQuery,
     MetricsQueryResponse,
@@ -18,6 +19,7 @@ from .page_data import (
     SpanRow,
     TraceDetail,
     TraceRow,
+    TracesListResponse,
     TracesQuery,
 )
 
@@ -35,34 +37,86 @@ def http_label(name: str | None, attributes: dict) -> tuple[str, str | None]:
     return name or "(no root span)", None
 
 
-async def list_traces(datasette, query: TracesQuery) -> list[TraceRow]:
+# What each sortable column name means in SQL, over the ``matching`` CTE in
+# list_traces. Sorting by "label" orders by the URL path (or the root span
+# name for non-HTTP roots): the method prefix the label carries is not
+# something anyone wants to sort on.
+TRACE_ORDER_BY = {
+    "label": "coalesce(url_path, name)",
+    "service_name": "service_name",
+    "http_status": "http_status",
+    "span_count": "span_count",
+    "error_count": "error_count",
+    "duration_ms": "duration_ms",
+    "start_ns": "start_ns",
+    "status": "status",
+}
+# The allowlist the API validates against and the SQL behind it are two halves
+# of one contract: drifting apart would 400 a sortable column or, worse, order
+# by the wrong one.
+assert set(TRACE_ORDER_BY) == set(TRACE_SORT_COLUMNS)
+
+
+def _order_clause(query: TracesQuery) -> str:
+    """``order by`` for one TracesQuery. Nulls sort last in both directions (a
+    trace with no HTTP status shouldn't lead the ascending sort), and every
+    sort ends in a total order so paging can't repeat or skip a row."""
+    column = query.sort or query.sort_desc
+    direction = "asc" if query.sort else "desc"
+    clause = f"{TRACE_ORDER_BY[column]} {direction} nulls last"
+    if column != "start_ns":
+        clause += ", start_ns desc"
+    return clause + ", trace_id"
+
+
+async def list_traces(datasette, query: TracesQuery) -> TracesListResponse:
+    """One page of the traces list: **one row per trace**, summarised by its
+    root span.
+
+    Ordering is done here rather than in the browser so it means what it
+    says: "slowest first" is the slowest of every stored trace, not of
+    whichever page happened to be loaded.
+
+    Paging is by offset (``next`` is an offset in disguise) rather than
+    keyset. Keyset would need a null-aware cursor per sortable column for
+    columns that are routinely null (duration_ms, http_status); against a
+    ring buffer of at most a few tens of thousands of traces, an offset scan
+    is not worth that.
+    """
     db = datasette.get_database(store.db_name(datasette))
     where = ""
     params: list = []
     if query.service:
         where = "where t.service_name = ?"
         params.append(query.service)
-    params.append(query.limit)
-    # root_span_id is a primary-key probe into spans: display-time lookup
-    # of the two url fields rather than promoting them into the traces
-    # table keeps the v1 schema contract untouched.
+    total = (
+        await db.execute(f"select count(*) from traces t {where}", params)
+    ).single_value()
+    # root_span_id is a primary-key probe into spans: display-time lookup of
+    # the two url fields rather than promoting them into the traces table
+    # keeps the v1 schema contract untouched.
     result = await db.execute(
         f"""
-        select t.trace_id, t.name, t.service_name, t.span_count,
-               t.error_count, t.duration_ms, t.start_ns, t.http_status,
-               t.status,
-               json_extract(r.attributes, '$."url.path"') as url_path,
-               json_extract(r.attributes, '$."http.request.method"')
-                 as http_method
-        from traces t
-        left join spans r on r.span_id = t.root_span_id
-        {where}
-        order by t.start_ns desc limit ?
+        with matching as (
+          select t.trace_id, t.name, t.service_name, t.span_count,
+                 t.error_count, t.duration_ms, t.start_ns, t.http_status,
+                 t.status,
+                 json_extract(r.attributes, '$."url.path"') as url_path,
+                 json_extract(r.attributes, '$."http.request.method"')
+                   as http_method
+          from traces t
+          left join spans r on r.span_id = t.root_span_id
+          {where}
+        )
+        select * from matching
+        order by {_order_clause(query)} limit ? offset ?
         """,
-        params,
+        # One row past the page: its presence is the whole "is there a next
+        # page?" test, and it never reaches the client.
+        params + [query.size + 1, query.offset],
     )
     rows = []
-    for r in result.rows:
+    for r in list(result.rows)[: query.size]:
         attrs = {}
         if r["url_path"]:
             attrs = {
@@ -84,7 +138,13 @@ async def list_traces(datasette, query: TracesQuery) -> list[TraceRow]:
                 status=r["status"],
             )
         )
-    return rows
+    has_more = len(result.rows) > query.size
+    return TracesListResponse(
+        traces=rows,
+        query=query,
+        next=str(query.offset + query.size) if has_more else None,
+        total=total,
+    )
 
 
 async def list_services(datasette) -> list[str]:
