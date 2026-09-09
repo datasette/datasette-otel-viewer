@@ -227,7 +227,7 @@ async def test_root_kinds_bucket_traces_by_what_started_them(make_ds):
     own span name, tagged with the scope that emitted it -- which is how a
     plugin's roots (datasette_cron.run and friends) stay separate from
     Datasette's own without this plugin knowing they exist."""
-    ds = await make_ds(public_viewer=True)
+    ds = await make_ds(public_viewer=True, self_traces=True)
     await ds.client.get("/-/versions.json")
     await drain()
 
@@ -268,7 +268,7 @@ async def test_root_kinds_bucket_traces_by_what_started_them(make_ds):
 
 @pytest.mark.asyncio
 async def test_root_filter_from_the_page_url(make_ds):
-    ds = await make_ds(public_viewer=True)
+    ds = await make_ds(public_viewer=True, self_traces=True)
     await ds.client.get("/-/versions.json")
     await drain()
     data = page_data((await ds.client.get("/-/otel/traces?root=http")).text)
@@ -279,7 +279,7 @@ async def test_root_filter_from_the_page_url(make_ds):
 
 @pytest.mark.asyncio
 async def test_self_stored_trace_round_trips(make_ds):
-    ds = await make_ds(public_viewer=True)
+    ds = await make_ds(public_viewer=True, self_traces=True)
     await ds.client.get("/")
     await drain()
     listing = await ds.client.get("/-/otel/traces")
@@ -293,7 +293,7 @@ async def test_http_roots_show_path_not_route_pattern(make_ds):
     """Root spans are named after the low-cardinality route *pattern*
     (semconv); the UI shows the concrete "<method> <url.path>" instead,
     keeping the pattern as `name` (list tooltip) / `route` (waterfall)."""
-    ds = await make_ds(public_viewer=True)
+    ds = await make_ds(public_viewer=True, self_traces=True)
     await ds.client.get("/-/versions.json")
     await drain()
 

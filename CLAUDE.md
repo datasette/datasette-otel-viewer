@@ -116,6 +116,11 @@ the real `Annotated[..., Body()]` objects at decoration time.
 - Generated files are gitignored: `api.d.ts`, `*_schema.json`, `*.types.ts`,
   `static/gen/`, `manifest.json`. Run `just types` after touching Pydantic
   models or route signatures; `just frontend` before `just dev`.
+- `make_ds()` builds instances with `self_traces: false` unless a test passes
+  `self_traces=True`. The BatchSpanProcessor flushes on its own timer, so an
+  instance that records itself can drop spans into the store mid-test, which
+  every row count then races -- that was a ~1-in-4 suite failure. Tests that
+  want self-recorded spans opt in and `drain()`.
 - Tests configure `plugins.datasette-vite.dev_paths` so page routes render
   without a build; `test_built_manifest_serves_hashed_assets` is the one test
   that needs `just frontend` first (CI does it).

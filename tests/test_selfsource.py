@@ -13,7 +13,7 @@ from datasette_otel_viewer import selfsource
 
 @pytest.mark.asyncio
 async def test_request_spans_land_in_store(make_ds, tmp_path):
-    ds = await make_ds(public_viewer=True)
+    ds = await make_ds(self_traces=True, public_viewer=True)
     response = await ds.client.get("/")
     assert response.status_code == 200
     await drain()
@@ -31,7 +31,7 @@ async def test_creation_time_attributes_are_stored(make_ds, tmp_path):
     SamplingResult, so a sampler that returns a bare decision drops them."""
     from opentelemetry import trace
 
-    await make_ds(public_viewer=True)  # arms the store
+    await make_ds(self_traces=True, public_viewer=True)  # arms the store
     tracer = trace.get_tracer("attribute-test")
     with tracer.start_as_current_span(
         "with-initial-attributes", attributes={"at.start": "kept"}
@@ -51,7 +51,7 @@ async def test_creation_time_attributes_are_stored(make_ds, tmp_path):
 async def test_no_feedback_loop(make_ds, tmp_path):
     """The measured runaway is ~10-14k spans/s. With suppression, span count
     stabilizes once activity stops: the store's own writes emit nothing."""
-    ds = await make_ds()
+    ds = await make_ds(self_traces=True)
     await ds.client.get("/")
     await drain()
     count_1 = len(raw_span_rows(tmp_path / "otel.db"))
@@ -90,7 +90,7 @@ async def test_foreign_provider_disables_self_mode(make_ds, tmp_path, capsys):
     selfsource.install()
     assert selfsource._state["mode"] == "foreign"
 
-    ds = await make_ds()
+    ds = await make_ds(self_traces=True)
     assert "self_traces is disabled" in capsys.readouterr().err
     await ds.client.get("/")
     await asyncio.sleep(0.05)

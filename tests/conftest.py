@@ -92,6 +92,12 @@ async def make_ds(tmp_path):
         from datasette.app import Datasette
 
         plugin_config.setdefault("db_path", str(tmp_path / "otel.db"))
+        # Self-tracing off unless a test asks for it. The BatchSpanProcessor
+        # flushes on its own timer, so an instance that records itself can
+        # drop its startup and query spans into the store at any moment --
+        # which any test counting rows then races (seen as "assert 17 == 6").
+        # Tests that want those spans pass self_traces=True and drain().
+        plugin_config.setdefault("self_traces", False)
         ds = Datasette(
             [],
             memory=True,

@@ -37,7 +37,7 @@ async def test_every_section_sits_under_the_viewer_root(make_ds):
 @pytest.mark.asyncio
 async def test_a_detail_page_keeps_its_section(make_ds):
     "A trace hangs off Traces, and names itself as the leaf."
-    ds = await make_ds(public_viewer=True)
+    ds = await make_ds(public_viewer=True, self_traces=True)
     await ds.client.get("/-/versions.json")
     await drain()
     listed = await ds.client.post("/-/otel/api/traces/list", json={"root": "http"})
