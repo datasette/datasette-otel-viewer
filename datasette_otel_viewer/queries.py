@@ -8,12 +8,16 @@ import re
 
 from . import metrics_math, store
 from .page_data import (
+    ACCESS_READ,
+    ACCESS_WRITE,
     ENDPOINT_LIMIT,
     POINT_LIMIT,
     ROOT_HTTP,
     ROOT_NONE,
     ROUTE_NONE,
     SPAN_LIMIT,
+    SQL_QUERY_LIMIT,
+    SQL_TEXT_LIMIT,
     TRACE_SORT_COLUMNS,
     EndpointRow,
     EndpointsQuery,
@@ -25,6 +29,10 @@ from .page_data import (
     Series,
     SeriesPoint,
     SpanRow,
+    SqlFilters,
+    SqlQueriesQuery,
+    SqlQueriesResponse,
+    SqlQueryRow,
     TraceDetail,
     TraceRootKind,
     TraceRow,
@@ -432,6 +440,205 @@ async def get_trace(datasette, trace_id: str) -> TraceDetail | None:
         spans=spans,
         truncated=len(spans) == SPAN_LIMIT,
         database=db_name,
+    )
+
+
+# A span is SQL work if it carries query text or a callback name, rather than
+# because of its span name: Datasette records `datasette.callback` in place of
+# `db.query.text` for execute_fn()-style calls, and both are one `db.query`.
+_SPAN_CALLBACK = "json_extract(s.attributes, '$.\"datasette.callback\"')"
+_SPAN_ROWS = "json_extract(s.attributes, '$.\"datasette.rows_returned\"')"
+
+# Statements that went through the write path. Datasette gives a write its
+# own `db.write.queue_wait`/`db.write.execute` child spans, which is a better
+# signal than reading the SQL: it catches `execute_write_fn()` callbacks,
+# which carry no SQL text at all, and it does not mistake a `WITH ... select`
+# read for a write. `datasette.operation` (read|write) would be the direct
+# answer, but the registry declares it without setting it on any span.
+_WRITE_PARENTS = """
+  select distinct parent_span_id as span_id from spans
+  where name in ('db.write.execute', 'db.write.queue_wait')
+    and parent_span_id is not null
+"""
+# ...with the statement keyword as a fallback, for a write whose child spans
+# were pruned or never arrived.
+_WRITE_KEYWORDS = (
+    "'INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'CREATE', 'DROP', 'ALTER', "
+    "'VACUUM', 'BEGIN', 'COMMIT'"
+)
+# coalesce, not a bare column: db_operation is NULL for every callback, and
+# `upper(NULL) in (...)` is NULL rather than false -- which would drop
+# callbacks out of *both* sides of the read/write filter.
+_IS_WRITE = (
+    "(w.span_id is not null or "
+    f"upper(coalesce(s.db_operation, '')) in ({_WRITE_KEYWORDS}))"
+)
+
+# The statement a span ran, and the identity rows are grouped by: text when
+# there is text, else the callback's name.
+_SQL_SPANS = f"""
+  select s.span_id, s.trace_id, s.start_ns, s.duration_ms, s.status,
+         s.service_name, s.db_namespace, s.db_operation, s.db_query_text,
+         {_SPAN_CALLBACK} as callback,
+         coalesce(s.db_query_text, {_SPAN_CALLBACK}) as statement,
+         {_SPAN_ROWS} as rows_returned,
+         {_IS_WRITE} as is_write
+  from spans s
+  left join ({_WRITE_PARENTS}) w on w.span_id = s.span_id
+  where (s.db_query_text is not null or {_SPAN_CALLBACK} is not null)
+  {{extra_where}}
+"""
+
+
+def _sql_where(filters: SqlFilters) -> tuple[str, list]:
+    "The ``and ...`` tail for _SQL_SPANS, from one SqlFilters."
+    clauses: list[str] = []
+    params: list = []
+    if filters.service:
+        clauses.append("s.service_name = ?")
+        params.append(filters.service)
+    if filters.sql:
+        # The needle matches the callback name too, so filtering by "plants"
+        # doesn't silently hide the callbacks that touched it.
+        clauses.append(
+            f"(s.db_query_text like ? escape '\\' "
+            f"or {_SPAN_CALLBACK} like ? escape '\\')"
+        )
+        params += [_like_param(filters.sql)] * 2
+    if filters.database:
+        clauses.append("s.db_namespace = ?")
+        params.append(filters.database)
+    if filters.operation:
+        clauses.append("s.db_operation = ?")
+        params.append(filters.operation)
+    if filters.access == ACCESS_WRITE:
+        clauses.append(_IS_WRITE)
+    elif filters.access == ACCESS_READ:
+        clauses.append(f"not {_IS_WRITE}")
+    if filters.min_duration_ms is not None:
+        clauses.append("s.duration_ms >= ?")
+        params.append(filters.min_duration_ms)
+    if not clauses:
+        return "", params
+    return "and " + " and ".join(clauses), params
+
+
+async def _sql_facet(datasette, query: SqlQueriesQuery, column: str) -> list[str]:
+    """Distinct values of one span column under every filter *except* the one
+    that column drives -- the options you could switch to."""
+    db = datasette.get_database(store.db_name(datasette))
+    field = {"db_namespace": "database", "db_operation": "operation"}[column]
+    where, params = _sql_where(query.model_copy(update={field: None}))
+    result = await db.execute(
+        f"select distinct {column} from ({_SQL_SPANS.format(extra_where=where)}) "
+        f"where {column} is not null order by 1 limit 100",
+        params,
+    )
+    return [r[column] for r in result.rows]
+
+
+async def sql_queries(datasette, query: SqlQueriesQuery) -> SqlQueriesResponse:
+    """The SQL summary behind ``/-/otel/sql``: one row per statement, ordered
+    by the time it accounts for in total.
+
+    Total time first rather than the single slowest run, because a 2ms query
+    run ten thousand times costs more than a 400ms one run twice -- and every
+    other column is sortable in the browser (the whole list arrives in one
+    response, see lib/sort.ts).
+
+    Percentiles are exact, nearest-rank over the stored durations; the window
+    definitions are split for the same reason as in http_endpoints.
+    """
+    db = datasette.get_database(store.db_name(datasette))
+    where, params = _sql_where(query)
+    spans = _SQL_SPANS.format(extra_where=where)
+    totals = (
+        await db.execute(
+            f"select count(*) as run_count, sum(duration_ms) as total_ms "
+            f"from ({spans})",
+            params,
+        )
+    ).first()
+    result = await db.execute(
+        f"""
+        with sql_spans as ({spans}),
+        ranked as (
+          select db_namespace, statement, duration_ms,
+                 row_number() over ranked_w as rn, count(*) over whole_w as n
+          from sql_spans where duration_ms is not null
+          window ranked_w as (
+                   partition by db_namespace, statement order by duration_ms
+                 ),
+                 whole_w as (partition by db_namespace, statement)
+        ),
+        pct as (
+          select db_namespace, statement,
+                 min(case when rn >= 0.5 * n then duration_ms end) as p50,
+                 min(case when rn >= 0.95 * n then duration_ms end) as p95
+          from ranked group by db_namespace, statement
+        ),
+        slowest as (
+          select db_namespace, statement, trace_id, span_id,
+                 row_number() over (
+                   partition by db_namespace, statement
+                   order by duration_ms desc, span_id
+                 ) as rn
+          from sql_spans
+        )
+        select q.db_namespace as database, max(q.db_operation) as operation,
+               q.statement as statement,
+               max(q.db_query_text is null) as is_callback,
+               max(q.is_write) as is_write,
+               max(q.callback) as callback,
+               count(*) as run_count,
+               sum(q.status = 'ERROR') as error_count,
+               sum(q.duration_ms) as total_ms, max(q.duration_ms) as max_ms,
+               max(q.rows_returned) as max_rows, max(q.start_ns) as last_seen_ns,
+               max(p.p50) as p50_ms, max(p.p95) as p95_ms,
+               max(sl.trace_id) as slowest_trace_id,
+               max(sl.span_id) as slowest_span_id
+        from sql_spans q
+        left join pct p
+          on p.db_namespace is q.db_namespace and p.statement is q.statement
+        left join slowest sl
+          on sl.db_namespace is q.db_namespace and sl.statement is q.statement
+         and sl.rn = 1
+        group by q.db_namespace, q.statement
+        order by total_ms desc limit ?
+        """,
+        params + [SQL_QUERY_LIMIT + 1],
+    )
+    rows = list(result.rows)
+    queries = [
+        SqlQueryRow(
+            query=(r["statement"] or "")[:SQL_TEXT_LIMIT],
+            text_truncated=len(r["statement"] or "") > SQL_TEXT_LIMIT,
+            callback=r["callback"] if r["is_callback"] else None,
+            database=r["database"],
+            operation=r["operation"],
+            is_write=bool(r["is_write"]),
+            run_count=r["run_count"],
+            error_count=r["error_count"] or 0,
+            total_ms=r["total_ms"],
+            p50_ms=r["p50_ms"],
+            p95_ms=r["p95_ms"],
+            max_ms=r["max_ms"],
+            max_rows=r["max_rows"],
+            last_seen_ns=r["last_seen_ns"],
+            slowest_trace_id=r["slowest_trace_id"],
+            slowest_span_id=r["slowest_span_id"],
+        )
+        for r in rows[:SQL_QUERY_LIMIT]
+    ]
+    return SqlQueriesResponse(
+        queries=queries,
+        query=query,
+        databases=await _sql_facet(datasette, query, "db_namespace"),
+        operations=await _sql_facet(datasette, query, "db_operation"),
+        services=await list_services(datasette),
+        run_count=totals["run_count"] or 0,
+        total_ms=totals["total_ms"],
+        truncated=len(rows) > SQL_QUERY_LIMIT,
     )
 
 

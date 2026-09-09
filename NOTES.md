@@ -180,6 +180,37 @@ plus whatever else was narrowing the summary, so the trace list shows exactly
 the requests the row counted; the list renders those as chips you can drop
 one at a time, since the controls for them live on this page.
 
+#### SQL queries
+
+![SQL query summary](docs/screenshots/sql.png)
+
+`/-/otel/sql` is the same spans seen statement-first: one row per
+`(database, statement)`, ordered by **total** time rather than by the slowest
+single run, because a 0.5 ms query run ten thousand times costs more than a
+400 ms one run twice. Columns: runs, errors, total, p50/p95/max, the largest
+`datasette.rows_returned` seen, and last seen. The Max cell links straight to
+that run's span in its own waterfall.
+
+Callback-style reads (`execute_fn()` and friends) carry `datasette.callback`
+instead of `db.query.text`; they are listed under the callback's name and
+tagged `callback`, since on a real instance they can be a third of the
+database work. Filters: `?sql=` (substring of the query text *or* the
+callback name), `?access=read|write`, `?database=` (`db.namespace`),
+`?operation=`, `?min_duration_ms=`, `?service=`.
+
+Reads and writes are told apart structurally, not by reading the SQL: a write
+gets its own `db.write.queue_wait`/`db.write.execute` child spans, so a write
+*callback* — which carries no SQL text at all — is counted as one, and a
+`with … select` read is not mistaken for a write by its first keyword. The
+statement keyword is a fallback for a write whose child spans were pruned.
+(Datasette's own name for this split is `datasette.operation`, an attribute
+its registry declares but does not currently set on any span.)
+
+**This page prints stored SQL**, which on a public instance includes
+user-supplied queries with their literals — it is gated by
+`datasette-otel-viewer` like everything else, and `public_viewer: true` opens
+it along with the rest of the viewer. See "Privacy" above.
+
 #### Filtering by what started the trace
 
 `?root=` (the **Root** dropdown) buckets traces by their root span. HTTP

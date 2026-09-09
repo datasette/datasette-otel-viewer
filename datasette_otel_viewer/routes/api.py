@@ -18,6 +18,8 @@ from ..page_data import (
     MetricsListResponse,
     MetricsQuery,
     MetricsQueryResponse,
+    SqlQueriesQuery,
+    SqlQueriesResponse,
     TraceDetail,
     TracesListResponse,
     TracesQuery,
@@ -47,6 +49,13 @@ async def api_http_endpoints(
     datasette, request, body: Annotated[EndpointsQuery, Body()]
 ):
     summary = await queries.http_endpoints(datasette, body)
+    return Response.json(summary.model_dump())
+
+
+@router.POST(r"^/-/otel/api/sql/queries$", output=SqlQueriesResponse)
+@check_viewer()
+async def api_sql_queries(datasette, request, body: Annotated[SqlQueriesQuery, Body()]):
+    summary = await queries.sql_queries(datasette, body)
     return Response.json(summary.model_dump())
 
 

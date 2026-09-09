@@ -158,6 +158,107 @@ class HttpSummaryPageData(EndpointsResponse):
     database: str
 
 
+# One row per distinct statement; a Datasette instance runs a bounded set of
+# them, so this is a guard rather than a paging scheme (like ENDPOINT_LIMIT).
+SQL_QUERY_LIMIT = 200
+# Query text is stored in full but a summary row does not need all of it --
+# and some of it is user-supplied SQL that can be enormous.
+SQL_TEXT_LIMIT = 2000
+
+
+# ``SqlFilters.access``: Datasette's own name for this split is
+# ``datasette.operation`` (read | write), an attribute its telemetry registry
+# declares but does not currently set on any span -- queries._SQL_SPANS
+# derives it instead. Kept distinct from ``operation`` here, which is
+# semconv's ``db.operation.name`` (SELECT, DELETE, PRAGMA...).
+ACCESS_READ = "read"
+ACCESS_WRITE = "write"
+
+
+class SqlFilters(BaseModel):
+    "What ``/-/otel/sql`` can narrow by."
+
+    service: str | None = None
+    # ACCESS_READ or ACCESS_WRITE.
+    access: str | None = None
+    # Substring of the query text (or of the callback name).
+    sql: str | None = None
+    # db.namespace: the database the statement ran against.
+    database: str | None = None
+    # db.operation.name: SELECT, INSERT, ...
+    operation: str | None = None
+    min_duration_ms: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _check_access(self):
+        if self.access is not None and self.access not in (
+            ACCESS_READ,
+            ACCESS_WRITE,
+        ):
+            raise ValueError(
+                f'access must be "{ACCESS_READ}" or "{ACCESS_WRITE}", not '
+                f"{self.access!r}"
+            )
+        return self
+
+
+class SqlQueryRow(BaseModel):
+    """One statement on ``/-/otel/sql``, aggregated over every span that ran
+    it. Callback-style work (``execute_fn`` and friends) has no SQL text --
+    Datasette records ``datasette.callback`` in its place -- and is listed
+    too, so the page accounts for all of a database's work rather than the
+    text-bearing part of it."""
+
+    # The SQL, or the callback's name when ``callback`` is set. Truncated to
+    # SQL_TEXT_LIMIT, with ``text_truncated`` saying so.
+    query: str
+    text_truncated: bool = False
+    callback: str | None = None
+    database: str | None = None
+    operation: str | None = None
+    # True when this statement went through the write path -- see
+    # queries._SQL_SPANS for how that is decided.
+    is_write: bool = False
+    run_count: int
+    # Runs whose span ended in status ERROR.
+    error_count: int
+    # Where the time actually went: the default ordering, because one slow
+    # statement run once matters less than a fast one run ten thousand times.
+    total_ms: float | None = None
+    p50_ms: float | None = None
+    p95_ms: float | None = None
+    max_ms: float | None = None
+    # datasette.rows_returned at its highest, for reads that pull a lot.
+    max_rows: int | None = None
+    last_seen_ns: int | None = None
+    # The slowest run, for a jump straight to that span in its waterfall.
+    slowest_trace_id: str | None = None
+    slowest_span_id: str | None = None
+
+
+class SqlQueriesQuery(SqlFilters):
+    "Body of ``POST /-/otel/api/sql/queries``."
+
+
+class SqlQueriesResponse(BaseModel):
+    queries: list[SqlQueryRow]
+    query: SqlQueriesQuery
+    # Filter options under the *other* filters, facet-style.
+    databases: list[str] = []
+    operations: list[str] = []
+    services: list[str] = []
+    # Matching runs, across every statement (not just the listed ones).
+    run_count: int
+    total_ms: float | None = None
+    truncated: bool = False
+
+
+class SqlSummaryPageData(SqlQueriesResponse):
+    "Embedded by ``GET /-/otel/sql``."
+
+    database: str
+
+
 # Reserved ``TracesQuery.root`` values: every other value is a root span
 # name. A plugin would have to name a *non-HTTP* root span literally "http"
 # or "none" to collide.
@@ -417,6 +518,7 @@ __exports__ = [
     OtelIndexPageData,
     TracesListPageData,
     HttpSummaryPageData,
+    SqlSummaryPageData,
     TraceDetailPageData,
     MetricsListPageData,
     MetricDetailPageData,

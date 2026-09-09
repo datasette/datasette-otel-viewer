@@ -253,6 +253,18 @@ function buildShots(browser, ids) {
       await ctx.close();
     },
 
+    // The SQL summary: the seeded db.query spans, costliest statement first.
+    sql: async () => {
+      const { ctx, page } = await newPage(browser);
+      await page.goto(`${BASE}/-/otel/sql`);
+      await page
+        .locator("main.sql tbody tr.row-link")
+        .first()
+        .waitFor({ timeout: 15_000 });
+      await page.screenshot({ path: out("sql") });
+      await ctx.close();
+    },
+
     // The waterfall for the Datasette request, with the slow query selected
     // so the inspector (attributes incl. db.query.text) is open.
     trace: async () => {

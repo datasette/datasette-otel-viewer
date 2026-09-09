@@ -163,6 +163,7 @@
   <h1>
     HTTP endpoints
     <a class="dim" href="/-/otel/traces">Traces &rarr;</a>
+    <a class="dim" href="/-/otel/sql">SQL &rarr;</a>
     <a class="dim" href="/-/otel/metrics">Metrics &rarr;</a>
   </h1>
 

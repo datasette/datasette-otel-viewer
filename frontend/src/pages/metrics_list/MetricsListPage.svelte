@@ -83,7 +83,12 @@
 </script>
 
 <main class="metrics">
-  <h1>Metrics <a class="dim" href="/-/otel/traces">Traces &rarr;</a></h1>
+  <h1>
+    Metrics
+    <a class="dim" href="/-/otel/traces">Traces &rarr;</a>
+    <a class="dim" href="/-/otel/http">HTTP endpoints &rarr;</a>
+    <a class="dim" href="/-/otel/sql">SQL &rarr;</a>
+  </h1>
 
   <div class="controls">
     <label>

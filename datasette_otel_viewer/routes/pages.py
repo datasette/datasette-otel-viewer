@@ -14,6 +14,8 @@ from ..page_data import (
     MetricsListPageData,
     MetricsListQuery,
     OtelIndexPageData,
+    SqlQueriesQuery,
+    SqlSummaryPageData,
     TraceDetailPageData,
     TracesListPageData,
     TracesQuery,
@@ -140,6 +142,40 @@ async def http_summary_page(datasette, request):
         request,
         title="HTTP endpoints",
         entrypoint="src/pages/http_summary/index.ts",
+        page_data=page_data,
+    )
+
+
+def _sql_filters(request) -> dict:
+    "``?service=&sql=&database=&operation=&min_duration_ms=`` for /-/otel/sql."
+    args = request.args
+    return {
+        "service": args.get("service") or None,
+        "sql": args.get("sql") or None,
+        "access": args.get("access") or None,
+        "database": args.get("database") or None,
+        "operation": args.get("operation") or None,
+        "min_duration_ms": args.get("min_duration_ms") or None,
+    }
+
+
+@router.GET(r"^/-/otel/sql$")
+@check_viewer()
+async def sql_summary_page(datasette, request):
+    try:
+        query = SqlQueriesQuery(**_sql_filters(request))
+    except ValidationError as error:
+        return Response.text(f"Bad SQL query filter: {error}", status=400)
+    summary = await queries.sql_queries(datasette, query)
+    page_data = SqlSummaryPageData(
+        **summary.model_dump(),
+        database=store.db_name(datasette),
+    )
+    return await _render(
+        datasette,
+        request,
+        title="SQL queries",
+        entrypoint="src/pages/sql_summary/index.ts",
         page_data=page_data,
     )
 

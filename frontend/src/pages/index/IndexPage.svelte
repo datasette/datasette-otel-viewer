@@ -38,6 +38,10 @@
         <dd>{fmt.format(data.http_request_count)}</dd>
       </dl>
     </a>
+    <a class="card" href="/-/otel/sql">
+      <h2>SQL queries &rarr;</h2>
+      <p>Every statement this instance ran, by the time it accounts for.</p>
+    </a>
     <a class="card" href="/-/otel/metrics">
       <h2>Metrics &rarr;</h2>
       <p>Counters, gauges and histograms charted over time.</p>

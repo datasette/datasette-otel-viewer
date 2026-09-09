@@ -131,7 +131,10 @@ the real `Annotated[..., Body()]` objects at decoration time.
   `/-/otel/traces` by handing over its own querystring. Percentiles in
   `http_endpoints` need two window definitions -- `count(*)` over an ordered
   window is a running count, which silently collapses every percentile onto
-  the minimum.
+  the minimum. `sql_queries` aggregates spans rather than traces (its own
+  `SqlFilters`/`_sql_where`, since path/status/method mean nothing there) and
+  keys rows on `coalesce(db_query_text, datasette.callback)` so callback work
+  is counted, not dropped.
 - The traces list's `?root=` filter buckets traces by root span --
   `queries.root_kinds` derives the buckets from the store (HTTP roots
   collapsed, everything else by span name and instrumentation scope), so

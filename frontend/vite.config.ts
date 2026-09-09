@@ -56,6 +56,7 @@ export default defineConfig({
         index: "src/pages/index/index.ts",
         traces_list: "src/pages/traces_list/index.ts",
         http_summary: "src/pages/http_summary/index.ts",
+        sql_summary: "src/pages/sql_summary/index.ts",
         trace_detail: "src/pages/trace_detail/index.ts",
         metrics_list: "src/pages/metrics_list/index.ts",
         metric_detail: "src/pages/metric_detail/index.ts",
