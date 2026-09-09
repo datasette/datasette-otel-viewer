@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
+  import Breadcrumbs from "../../components/Breadcrumbs.svelte";
   import {
     formatAbsoluteTimePrecise,
     formatDurationNs,
@@ -110,7 +111,12 @@
 
 <main class="trace" class:with-inspector={selectedNode !== null}>
   <header class="trace-header">
-    <a class="back-link" href="/-/otel/traces">&larr; all traces</a>
+    <Breadcrumbs
+      trail={[
+        { label: "Traces", href: "/-/otel/traces" },
+        { label: pageData.title },
+      ]}
+    />
     <div class="header-row">
       <h1>{pageData.title}</h1>
       <div class="trace-id-row">
@@ -268,14 +274,6 @@
 <style>
   .trace-header {
     margin-bottom: 1rem;
-  }
-  .back-link {
-    color: #555;
-    font-size: 0.85rem;
-    text-decoration: none;
-  }
-  .back-link:hover {
-    text-decoration: underline;
   }
   .header-row {
     display: flex;

@@ -128,6 +128,12 @@ viewer's `/-/otel/metrics` page; set its `path` option.
 
 ![Trace waterfall with the span inspector open](docs/screenshots/trace.png)
 
+Every viewer page hangs off the landing page, twice over: in Datasette's own
+header (`home / OpenTelemetry / SQL queries`) and again next to the page's own
+heading, so a trace reads `OpenTelemetry / Traces / GET /demo/plants`. The
+server builds the trail (`routes/pages.py`) and the Svelte pages render the
+same one (`components/Breadcrumbs.svelte`).
+
 Datasette's own menu carries one entry — **OpenTelemetry**, pointing at
 `/-/otel` — shown only to actors who may use the viewer, so nobody is offered
 a link that answers 403.

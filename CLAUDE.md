@@ -51,7 +51,7 @@ datasette_otel_viewer/
 ├── selfmetrics.py           # MeterProvider ownership/attach + SDK metrics → rows
 ├── store.py                 # Schema, batch insert, retention
 ├── permissions.py           # datasette-otel-viewer action; raw tables private by default
-├── templates/otel_viewer_base.html   # The single template
+├── templates/otel_viewer_base.html   # The single template (overrides Datasette's `crumbs` block)
 ├── static/gen/, manifest.json          # Built by Vite (gitignored)
 
 frontend/src/
@@ -103,6 +103,11 @@ the real `Annotated[..., Body()]` objects at decoration time.
 
 ## Key conventions
 
+- Breadcrumbs are built twice from one definition of the trail:
+  `routes/pages.SECTIONS`/`_crumbs()` feeds Datasette's header (the
+  `crumbs` block in `otel_viewer_base.html`, which calls core's
+  `crumb_items()` for the "home" link), and `components/Breadcrumbs.svelte`
+  renders the same trail above each page's `<h1>`. A new page needs both.
 - Svelte 5 runes only (`$state`, `$derived`, `$props`); no `export let`.
 - Generated files are gitignored: `api.d.ts`, `*_schema.json`, `*.types.ts`,
   `static/gen/`, `manifest.json`. Run `just types` after touching Pydantic

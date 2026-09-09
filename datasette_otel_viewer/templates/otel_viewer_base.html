@@ -2,6 +2,27 @@
 
 {% block title %}{{ page_title }}{% endblock %}
 
+{#
+  Datasette's own header crumbs, with this viewer's trail appended: "home /
+  OpenTelemetry / SQL queries". `crumb_items` is core's (app.py
+  `_crumb_items`), so the "home" link keeps following the view-instance
+  permission; `otel_crumbs` comes from routes/pages.py. The Svelte pages
+  render the same trail next to their <h1> -- see components/Breadcrumbs.svelte.
+#}
+{% block crumbs %}
+  <p class="crumbs">
+    {% if crumb_items is defined %}
+      {% for item in crumb_items(request=request) %}
+        <a href="{{ item.href }}">{{ item.label }}</a> /
+      {% endfor %}
+    {% endif %}
+    {% for item in otel_crumbs %}
+      <a href="{{ item.href }}">{{ item.label }}</a>
+      {%- if not loop.last %} / {% endif %}
+    {% endfor %}
+  </p>
+{% endblock %}
+
 {% block extra_head %}
   {{ datasette_otel_viewer_vite_entry(entrypoint) | safe }}
   <script type="application/json" id="pageData">{{ page_data | tojson }}</script>

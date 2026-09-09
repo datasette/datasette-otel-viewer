@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Breadcrumbs from "../../components/Breadcrumbs.svelte";
   import type { components } from "../../../api.d.ts";
   import { makeClient } from "../../api.ts";
   import {
@@ -154,7 +155,12 @@
 </script>
 
 <main class="metric">
-  <a class="back-link" href="/-/otel/metrics">&larr; all metrics</a>
+  <Breadcrumbs
+    trail={[
+      { label: "Metrics", href: "/-/otel/metrics" },
+      { label: metric.name },
+    ]}
+  />
   <h1 class="mono">{metric.name}</h1>
   <p class="dim meta">
     {[metric.type, metric.temporality, unit].filter(Boolean).join(" \u00b7 ")}
@@ -274,14 +280,6 @@
     margin: 0.25rem 0 0.25rem;
     font-size: 1.4rem;
     word-break: break-all;
-  }
-  .back-link {
-    color: #555;
-    font-size: 0.85rem;
-    text-decoration: none;
-  }
-  .back-link:hover {
-    text-decoration: underline;
   }
   .meta {
     font-size: 0.85rem;

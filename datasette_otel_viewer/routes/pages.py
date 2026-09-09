@@ -24,8 +24,33 @@ from ..router import check_viewer, router
 
 TEMPLATE = "otel_viewer_base.html"
 
+# The viewer's sections, in the order the landing page lists them. Every page
+# below the landing page hangs off one of these, and the trail they make is
+# rendered twice: in Datasette's own header (otel_viewer_base.html) and next
+# to the page's <h1> (components/Breadcrumbs.svelte).
+SECTIONS = {
+    "traces": ("/-/otel/traces", "Traces"),
+    "http": ("/-/otel/http", "HTTP endpoints"),
+    "sql": ("/-/otel/sql", "SQL queries"),
+    "metrics": ("/-/otel/metrics", "Metrics"),
+}
 
-async def _render(datasette, request, *, title, entrypoint, page_data):
+
+def _crumbs(datasette, *, section=None, page=None, page_href=None):
+    """``[{href, label}, ...]`` from the viewer root down to this page.
+    ``page`` is the leaf label for a detail page (a trace's title, a metric's
+    name); it links to itself, the way Datasette's own crumbs do."""
+    path = datasette.urls.path
+    trail = [{"href": path("/-/otel"), "label": "OpenTelemetry"}]
+    if section:
+        href, label = SECTIONS[section]
+        trail.append({"href": path(href), "label": label})
+    if page:
+        trail.append({"href": path(page_href), "label": page})
+    return trail
+
+
+async def _render(datasette, request, *, title, entrypoint, page_data, crumbs):
     return Response.html(
         await datasette.render_template(
             TEMPLATE,
@@ -33,6 +58,7 @@ async def _render(datasette, request, *, title, entrypoint, page_data):
                 "page_title": title,
                 "entrypoint": entrypoint,
                 "page_data": page_data.model_dump(),
+                "otel_crumbs": crumbs,
             },
             request=request,
         )
@@ -52,6 +78,7 @@ async def index_page(datasette, request):
         title="OpenTelemetry",
         entrypoint="src/pages/index/index.ts",
         page_data=page_data,
+        crumbs=_crumbs(datasette),
     )
 
 
@@ -106,6 +133,7 @@ async def traces_list_page(datasette, request):
         title="Traces",
         entrypoint="src/pages/traces_list/index.ts",
         page_data=page_data,
+        crumbs=_crumbs(datasette, section="traces"),
     )
 
 
@@ -122,6 +150,12 @@ async def trace_detail_page(datasette, request, trace_id: str):
         title=detail.title,
         entrypoint="src/pages/trace_detail/index.ts",
         page_data=page_data,
+        crumbs=_crumbs(
+            datasette,
+            section="traces",
+            page=detail.title,
+            page_href=f"/-/otel/traces/{trace_id}",
+        ),
     )
 
 
@@ -143,6 +177,7 @@ async def http_summary_page(datasette, request):
         title="HTTP endpoints",
         entrypoint="src/pages/http_summary/index.ts",
         page_data=page_data,
+        crumbs=_crumbs(datasette, section="http"),
     )
 
 
@@ -177,6 +212,7 @@ async def sql_summary_page(datasette, request):
         title="SQL queries",
         entrypoint="src/pages/sql_summary/index.ts",
         page_data=page_data,
+        crumbs=_crumbs(datasette, section="sql"),
     )
 
 
@@ -195,6 +231,7 @@ async def metrics_list_page(datasette, request):
         title="Metrics",
         entrypoint="src/pages/metrics_list/index.ts",
         page_data=page_data,
+        crumbs=_crumbs(datasette, section="metrics"),
     )
 
 
@@ -216,4 +253,10 @@ async def metric_detail_page(datasette, request, name: str):
         title=metric.name,
         entrypoint="src/pages/metric_detail/index.ts",
         page_data=page_data,
+        crumbs=_crumbs(
+            datasette,
+            section="metrics",
+            page=metric.name,
+            page_href=f"/-/otel/metrics/{name}",
+        ),
     )

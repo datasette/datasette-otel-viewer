@@ -1,5 +1,6 @@
 <script lang="ts">
   import { makeClient } from "../../api.ts";
+  import Breadcrumbs from "../../components/Breadcrumbs.svelte";
   import SortHeader from "../../components/SortHeader.svelte";
   import { nextSort, sortRows, type SortState } from "../../lib/sort.ts";
   import { formatAbsoluteTime, formatRelativeTime } from "../../lib/time.ts";
@@ -83,6 +84,7 @@
 </script>
 
 <main class="metrics">
+  <Breadcrumbs trail={[{ label: "Metrics" }]} />
   <h1>
     Metrics
     <a class="dim" href="/-/otel/traces">Traces &rarr;</a>
