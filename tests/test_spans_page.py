@@ -3,12 +3,14 @@ on span name *and* instrumentation scope, which is what separates a plugin's
 spans from Datasette's own without this plugin knowing their names."""
 
 import json
+import sqlite3
 import time
 
 import pytest
 from conftest import page_data
+from datasette.database import QueryInterrupted
 
-from datasette_otel_viewer import store
+from datasette_otel_viewer import queries, store
 
 START_NS = time.time_ns() - 3600 * 1_000_000_000
 
@@ -333,3 +335,32 @@ async def test_span_list_page_renders_and_is_gated(make_ds):
     assert (
         await private.client.post("/-/otel/api/spans/list", json={})
     ).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_a_store_too_slow_to_summarise_is_503_not_500(make_ds, monkeypatch):
+    """The summary pages read every stored span, so a big enough store on a
+    slow enough box outruns sql_time_limit_ms. That has to arrive as an
+    answer, not as the unhandled QueryInterrupted it used to be -- which
+    Datasette turns into a 500 and a traceback in the log.
+
+    The timeout is injected at the query function rather than by dropping
+    sql_time_limit_ms, which would interrupt Datasette's own startup queries
+    long before a route ran."""
+    ds = await make_ds(public_viewer=True)
+    await store.insert_spans(ds, [span_row(1, name="db.query")])
+
+    def interrupt(*args, **kwargs):
+        raise QueryInterrupted(sqlite3.OperationalError("interrupted"), "select 1", [])
+
+    for name in ("span_groups", "sql_queries", "list_traces"):
+        monkeypatch.setattr(queries, name, interrupt)
+
+    for path in ("/-/otel/spans", "/-/otel/sql", "/-/otel/traces"):
+        response = await ds.client.get(path)
+        assert response.status_code == 503, f"{path} gave {response.status_code}"
+        assert "timed out reading the trace store" in response.text
+
+    # The JSON API is behind the same gate, so it answers the same way.
+    api = await ds.client.post("/-/otel/api/spans/groups", json={})
+    assert api.status_code == 503

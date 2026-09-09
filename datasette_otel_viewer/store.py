@@ -144,6 +144,11 @@ create index if not exists idx_spans_name_start_ns on spans (name, start_ns);
 create index if not exists idx_spans_trace_id on spans (trace_id);
 create index if not exists idx_spans_service_name_start_ns
   on spans (service_name, start_ns);
+-- Parent-first, for the "did this span do a write?" probe on /-/otel/sql
+-- (queries._IS_WRITE_CHILD): name is in the index so the probe never touches
+-- the table. Without it that test is a table scan per span.
+create index if not exists idx_spans_parent_name
+  on spans (parent_span_id, name);
 
 create table if not exists metrics (
   name text primary key,

@@ -127,6 +127,16 @@ the real `Annotated[..., Body()]` objects at decoration time.
 - `scripts/shots_plugins/seed.py` is loaded only by `just shots`
   (`--plugins-dir`); it builds row dicts against `store.COLUMNS` /
   `METRIC_POINT_COLUMNS` by hand — update it when those change.
+- `/-/otel/sql` decides "was this a write?" with a correlated `exists` over
+  `spans(parent_span_id, name)` (`queries._IS_WRITE_CHILD`,
+  `store.idx_spans_parent_name`). The index is not optional: as a joined
+  subquery, or as this `exists` without the index, that test is a scan per
+  span and the page takes over a minute at `max_spans`.
+- Every route is wrapped by `check_viewer()`, which turns a `QueryInterrupted`
+  into a plain-text 503. The summary pages scan the whole store, so a big
+  store on a slow box can outrun `sql_time_limit_ms`; that has to be an
+  answer, not a 500. `prepare_connection` gives the otel database a 32MB page
+  cache for the same reason.
 - Store writes run inside `store.suppress()` so spans about storing spans are
   never recorded; see `selfsource.py` before touching the write path.
   `selfmetrics.py` drops metric points whose `db.namespace` is the otel
@@ -142,10 +152,17 @@ the real `Annotated[..., Body()]` objects at decoration time.
   (`service`, `path`, `route`, `method`, `status`, `min_duration_ms`);
   `queries._where()` turns one into SQL for the trace list, the root facet
   and the HTTP endpoint summary alike, so `/-/otel/http` can drill through to
-  `/-/otel/traces` by handing over its own querystring. Percentiles in
-  `http_endpoints` need two window definitions -- `count(*)` over an ordered
-  window is a running count, which silently collapses every percentile onto
-  the minimum -- all three summaries read them through `_percentile_ctes()`.
+  `/-/otel/traces` by handing over its own querystring. All three
+  summaries share one shape, and it is load-bearing at the default
+  `max_spans`: a materialized `grouped` CTE aggregates first, then
+  `_percentile_ctes()` joins one row per group onto it. `grouped` also hands
+  `pct` the group size (`n_timed`), which is what lets `ranked` get away with
+  a single window and a single sort, and lets `pct` discard every row but the
+  two percentile boundaries and the last. Do not reintroduce a `count(*)
+  over` window for the size, and do not join `pct` to the rows and aggregate
+  afterwards -- each costs a full extra pass over every span. The slowest
+  span's ids ride along on `pct` (`rn = n_timed`, ties broken by `span_id
+  desc`) rather than a second window pass.
   `sql_queries` aggregates spans rather than traces (its own
   `SqlFilters`/`_sql_where`, since path/status/method mean nothing there) and
   keys rows on `coalesce(db_query_text, datasette.callback)` so callback work

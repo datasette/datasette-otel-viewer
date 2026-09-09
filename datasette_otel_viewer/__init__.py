@@ -47,6 +47,26 @@ def startup(datasette):
 
 
 @hookimpl
+def prepare_connection(conn, database, datasette):
+    """Give the otel database a page cache big enough to summarise itself.
+
+    The summary pages (/-/otel/spans, /-/otel/sql) aggregate every stored
+    span, and they reach the rows through an index, so the table access is
+    random rather than sequential. Against SQLite's 2MB default cache and a
+    spans table that is tens of MB -- most of it the attributes/resource JSON
+    -- that means re-reading pages the same query already touched. 32MB holds
+    the working set: measured ~1120ms -> ~870ms on /-/otel/spans at the
+    100_000-span cap, on top of what the query shape saves.
+
+    Negative means KiB rather than pages, so the ceiling is the same whatever
+    the page size. Only this plugin's own database is touched -- the rest of
+    the instance keeps Datasette's defaults.
+    """
+    if database == store.db_name(datasette):
+        conn.execute("pragma cache_size = -32000")
+
+
+@hookimpl
 def register_routes():
     return router.routes()
 

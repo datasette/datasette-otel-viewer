@@ -213,18 +213,26 @@ async def http_endpoints(datasette, query: EndpointsQuery) -> EndpointsResponse:
     result = await db.execute(
         f"""
         with http as ({matching}),
+        -- Aggregate first, then join -- see span_groups; `grouped` also
+        -- feeds `pct` the group sizes it ranks against.
+        grouped as materialized (
+          select h.http_method as http_method, h.http_route as http_route,
+                 count(*) as request_count,
+                 sum(case when h.http_status >= 500 or h.error_count > 0
+                          then 1 else 0 end) as error_count,
+                 max(h.duration_ms) as max_ms, max(h.start_ns) as last_seen_ns,
+                 count(h.duration_ms) as n_timed
+          from http h
+          group by h.http_method, h.http_route
+        ),
         {_percentile_ctes("http", "http_method, http_route")}
-        select h.http_method as method, h.http_route as route,
-               count(*) as request_count,
-               sum(case when h.http_status >= 500 or h.error_count > 0
-                        then 1 else 0 end) as error_count,
-               max(h.duration_ms) as max_ms, max(h.start_ns) as last_seen_ns,
-               max(p.p50) as p50_ms, max(p.p95) as p95_ms
-        from http h
+        select g.http_method as method, g.http_route as route,
+               g.request_count, g.error_count, g.max_ms, g.last_seen_ns,
+               p.p50 as p50_ms, p.p95 as p95_ms
+        from grouped g
         left join pct p
-          on p.http_method is h.http_method and p.http_route is h.http_route
-        group by h.http_method, h.http_route
-        order by request_count desc limit ?
+          on p.http_method is g.http_method and p.http_route is g.http_route
+        order by g.request_count desc limit ?
         """,
         params + [ENDPOINT_LIMIT + 1],
     )
@@ -449,11 +457,21 @@ _SPAN_ROWS = "json_extract(s.attributes, '$.\"datasette.rows_returned\"')"
 # which carry no SQL text at all, and it does not mistake a `WITH ... select`
 # read for a write. `datasette.operation` (read|write) would be the direct
 # answer, but the registry declares it without setting it on any span.
-_WRITE_PARENTS = """
-  select distinct parent_span_id as span_id from spans
-  where name in ('db.write.execute', 'db.write.queue_wait')
-    and parent_span_id is not null
-"""
+# Correlated, not a joined subquery: `left join (select distinct
+# parent_span_id ...) w on w.span_id = s.span_id` is the same answer, but
+# SQLite materialises that subquery and then nested-loops it once per span
+# without building an index -- 100k spans x 23k write children, 20+ seconds,
+# past every sql_time_limit_ms there is. As an `exists` it is an index probe
+# per span (idx_spans_parent_name): that scan drops from 20.8s to 30ms, and
+# the page as a whole from "never" to ~700ms. The index is not optional --
+# without it this same `exists` is a table scan per span and the page is
+# back over 60 seconds.
+_IS_WRITE_CHILD = """
+  exists (
+    select 1 from spans c
+    where c.parent_span_id = s.span_id
+      and c.name in ('db.write.execute', 'db.write.queue_wait')
+  )"""
 # ...with the statement keyword as a fallback, for a write whose child spans
 # were pruned or never arrived.
 _WRITE_KEYWORDS = (
@@ -464,8 +482,7 @@ _WRITE_KEYWORDS = (
 # `upper(NULL) in (...)` is NULL rather than false -- which would drop
 # callbacks out of *both* sides of the read/write filter.
 _IS_WRITE = (
-    "(w.span_id is not null or "
-    f"upper(coalesce(s.db_operation, '')) in ({_WRITE_KEYWORDS}))"
+    f"({_IS_WRITE_CHILD} or upper(coalesce(s.db_operation, '')) in ({_WRITE_KEYWORDS}))"
 )
 
 # The statement a span ran, and the identity rows are grouped by: text when
@@ -478,7 +495,6 @@ _SQL_SPANS = f"""
          {_SPAN_ROWS} as rows_returned,
          {_IS_WRITE} as is_write
   from spans s
-  left join ({_WRITE_PARENTS}) w on w.span_id = s.span_id
   where (s.db_query_text is not null or {_SPAN_CALLBACK} is not null)
   {{extra_where}}
 """
@@ -556,35 +572,36 @@ async def sql_queries(datasette, query: SqlQueriesQuery) -> SqlQueriesResponse:
     result = await db.execute(
         f"""
         with sql_spans as ({spans}),
-        {_percentile_ctes("sql_spans", "db_namespace, statement")},
-        slowest as (
-          select db_namespace, statement, trace_id, span_id,
-                 row_number() over (
-                   partition by db_namespace, statement
-                   order by duration_ms desc, span_id
-                 ) as rn
-          from sql_spans
-        )
-        select q.db_namespace as database, max(q.db_operation) as operation,
-               q.statement as statement,
-               max(q.db_query_text is null) as is_callback,
-               max(q.is_write) as is_write,
-               max(q.callback) as callback,
-               count(*) as run_count,
-               sum(q.status = 'ERROR') as error_count,
-               sum(q.duration_ms) as total_ms, max(q.duration_ms) as max_ms,
-               max(q.rows_returned) as max_rows, max(q.start_ns) as last_seen_ns,
-               max(p.p50) as p50_ms, max(p.p95) as p95_ms,
-               max(sl.trace_id) as slowest_trace_id,
-               max(sl.span_id) as slowest_span_id
-        from sql_spans q
+        -- Aggregate first, then join -- see span_groups. It matters more
+        -- here: the join key is the statement *text*, so joining before the
+        -- group by compares full SQL strings once per run, not once per row.
+        grouped as materialized (
+          select q.db_namespace as db_namespace,
+                 max(q.db_operation) as operation,
+                 q.statement as statement,
+                 max(q.db_query_text is null) as is_callback,
+                 max(q.is_write) as is_write,
+                 max(q.callback) as callback,
+                 count(*) as run_count,
+                 sum(q.status = 'ERROR') as error_count,
+                 sum(q.duration_ms) as total_ms, max(q.duration_ms) as max_ms,
+                 max(q.rows_returned) as max_rows,
+                 max(q.start_ns) as last_seen_ns,
+                 count(q.duration_ms) as n_timed
+          from sql_spans q
+          group by q.db_namespace, q.statement
+        ),
+        {_percentile_ctes("sql_spans", "db_namespace, statement", slowest=True)}
+        select g.db_namespace as database, g.operation, g.statement,
+               g.is_callback, g.is_write,
+               g.callback, g.run_count, g.error_count, g.total_ms, g.max_ms,
+               g.max_rows, g.last_seen_ns,
+               p.p50 as p50_ms, p.p95 as p95_ms,
+               p.slowest_trace_id, p.slowest_span_id
+        from grouped g
         left join pct p
-          on p.db_namespace is q.db_namespace and p.statement is q.statement
-        left join slowest sl
-          on sl.db_namespace is q.db_namespace and sl.statement is q.statement
-         and sl.rn = 1
-        group by q.db_namespace, q.statement
-        order by total_ms desc limit ?
+          on p.db_namespace is g.db_namespace and p.statement is g.statement
+        order by g.total_ms desc limit ?
         """,
         params + [SQL_QUERY_LIMIT + 1],
     )
@@ -622,27 +639,71 @@ async def sql_queries(datasette, query: SqlQueriesQuery) -> SqlQueriesResponse:
     )
 
 
-def _percentile_ctes(source: str, partition: str) -> str:
+def _percentile_ctes(
+    source: str, partition: str, *, grouped: str = "grouped", slowest: bool = False
+) -> str:
     """``ranked``/``pct`` CTEs over ``source``, giving nearest-rank p50 and
     p95 per group. Every summary page reads its percentiles this way: the
     durations are all in the store, so there is nothing to estimate.
 
-    The two window definitions are load-bearing. ``count(*)`` over the
-    *ordered* window is a running count -- with it, every row's rank reaches
-    half its group and both percentiles collapse onto the minimum."""
+    ``grouped`` names a CTE the caller has already defined -- one row per
+    group, holding the ``partition`` columns under their own names plus
+    ``n_timed`` (``count(duration_ms)``, so nulls are excluded exactly as the
+    ranking excludes them). Reading the group size from there rather than
+    from a second ``count(*) over`` window is the whole trick: ``grouped``
+    scans every row anyway, so the size is free, and ``ranked`` is left with
+    a single window and a single sort. It also lets ``pct`` throw away all
+    but the three rows per group it actually reads -- the two percentile
+    boundaries and the last -- before it aggregates.
+
+    A percentile is the *first* row whose rank reaches the threshold, and
+    rank rises with duration, so that boundary row is the answer: ``rn >= k*n
+    and rn - 1 < k*n``. The float comparison is spelled the same on both
+    sides of that test as in the ``min(case ...)`` it replaced, so no group
+    can land on a different row through rounding.
+
+    ``slowest`` adds the slowest span's ids to the same ``pct`` row. Ranking
+    by duration *ascending* puts the slowest row last, so it is the one where
+    ``rn = n_timed``. The secondary ``span_id desc`` only breaks ties, and
+    does it so that the last of a tied run is the lowest span_id -- the same
+    span a separate ``order by duration_ms desc, span_id`` pass would pick.
+
+    One group differs from that older pass: one whose durations are *all*
+    null. The ranking runs over ``duration_ms is not null``, so such a group
+    now reports no slowest span rather than the lowest span_id among its
+    untimed rows. Its ``max_ms`` is null either way, so the cell the id
+    would have linked from is empty -- and every span this instance records
+    is timed (``selfsource.span_to_row`` always derives duration_ms)."""
+    columns = [column.strip() for column in partition.split(",")]
+    on = " and ".join(f"g.{column} is r.{column}" for column in columns)
+    keys = ", ".join(f"r.{column}" for column in columns)
+    order = "order by duration_ms, span_id desc" if slowest else "order by duration_ms"
+    carry = ", trace_id, span_id" if slowest else ""
+    pick = (
+        """,
+             max(case when r.rn = g.n_timed then r.trace_id end)
+               as slowest_trace_id,
+             max(case when r.rn = g.n_timed then r.span_id end)
+               as slowest_span_id"""
+        if slowest
+        else ""
+    )
     return f"""
     ranked as (
-      select {partition}, duration_ms,
-             row_number() over ranked_w as rn, count(*) over whole_w as n
+      select {partition}, duration_ms{carry},
+             row_number() over (partition by {partition} {order}) as rn
       from {source} where duration_ms is not null
-      window ranked_w as (partition by {partition} order by duration_ms),
-             whole_w as (partition by {partition})
     ),
     pct as (
-      select {partition},
-             min(case when rn >= 0.5 * n then duration_ms end) as p50,
-             min(case when rn >= 0.95 * n then duration_ms end) as p95
-      from ranked group by {partition}
+      select {keys},
+             min(case when r.rn >= 0.5 * g.n_timed then r.duration_ms end) as p50,
+             min(case when r.rn >= 0.95 * g.n_timed then r.duration_ms end)
+               as p95{pick}
+      from ranked r join {grouped} g on {on}
+      where r.rn = g.n_timed
+         or (r.rn >= 0.5 * g.n_timed and r.rn - 1 < 0.5 * g.n_timed)
+         or (r.rn >= 0.95 * g.n_timed and r.rn - 1 < 0.95 * g.n_timed)
+      group by {keys}
     )"""
 
 
@@ -651,7 +712,8 @@ def _percentile_ctes(source: str, partition: str) -> str:
 # parameter and reduced to a JSON path, never concatenated raw (the key is
 # also pattern-checked in page_data.SpanFilters).
 _SPAN_GROUPS_SQL = """
-  select s.span_id, s.trace_id, s.name, s.kind, s.scope_name, s.service_name,
+  select s.rowid as rowid,
+         s.span_id, s.trace_id, s.name, s.kind, s.scope_name, s.service_name,
          s.parent_span_id, s.start_ns, s.duration_ms, s.status,
          case when ?1 is null then null
               else json_extract(s.attributes, '$."' || ?1 || '"') end
@@ -700,15 +762,20 @@ def _span_source(query: SpansQuery) -> tuple[str, list]:
 async def span_attribute_keys(datasette, query: SpansQuery) -> list[str]:
     """Attribute keys on the newest matching spans: what ``split_by`` can be
     set to. Bounded by ATTRIBUTE_SAMPLE spans because attributes are JSON --
-    every key here is one a row in view actually carries."""
+    every key here is one a row in view actually carries.
+
+    "Newest" is by rowid, not start_ns: spans arrive in batches in roughly
+    start order, so insertion order picks the same sample, and there is no
+    index on start_ns -- ordering by it sorted the whole table (100k rows,
+    ~100ms) on every load of /-/otel/spans to take 500 rows."""
     db = datasette.get_database(store.db_name(datasette))
     source, params = _span_source(query.model_copy(update={"split_by": None}))
     result = await db.execute(
         f"""
         select distinct j.key from (
           select span_id, attributes from spans s
-          where s.span_id in (select span_id from ({source})
-                              order by start_ns desc limit ?)
+          where s.rowid in (select rowid from ({source})
+                            order by rowid desc limit ?)
         ) p, json_each(p.attributes) j
         order by j.key limit 200
         """,
@@ -756,33 +823,34 @@ async def span_groups(datasette, query: SpansQuery) -> SpansResponse:
     result = await db.execute(
         f"""
         with matching as ({source}),
-        {_percentile_ctes("matching", partition)},
-        slowest as (
-          select {partition}, trace_id, span_id,
-                 row_number() over (
-                   partition by {partition} order by duration_ms desc, span_id
-                 ) as rn
-          from matching
-        )
-        select m.name as name, m.scope_name as scope, max(m.kind) as kind,
-               m.split_value as split_value,
-               count(*) as span_count,
-               count(distinct m.trace_id) as trace_count,
-               sum(m.status = 'ERROR') as error_count,
-               sum(m.duration_ms) as total_ms, max(m.duration_ms) as max_ms,
-               max(m.start_ns) as last_seen_ns,
-               max(p.p50) as p50_ms, max(p.p95) as p95_ms,
-               max(sl.trace_id) as slowest_trace_id,
-               max(sl.span_id) as slowest_span_id
-        from matching m
+        -- Aggregate first, then join. `pct` holds one row per group, so
+        -- joining it to `grouped` is a handful of rows; joining it to
+        -- `matching` -- every span -- and aggregating afterwards is the same
+        -- answer for ~100x the work. `grouped` also feeds `pct` its group
+        -- sizes, which is why it is materialized and comes first.
+        grouped as materialized (
+          select m.name as name, m.scope_name as scope_name,
+                 max(m.kind) as kind, m.split_value as split_value,
+                 count(*) as span_count,
+                 count(distinct m.trace_id) as trace_count,
+                 sum(m.status = 'ERROR') as error_count,
+                 sum(m.duration_ms) as total_ms, max(m.duration_ms) as max_ms,
+                 max(m.start_ns) as last_seen_ns,
+                 count(m.duration_ms) as n_timed
+          from matching m
+          group by m.name, m.scope_name, m.split_value
+        ),
+        {_percentile_ctes("matching", partition, slowest=True)}
+        select g.name, g.scope_name as scope, g.kind, g.split_value,
+               g.span_count, g.trace_count, g.error_count, g.total_ms,
+               g.max_ms, g.last_seen_ns,
+               p.p50 as p50_ms, p.p95 as p95_ms,
+               p.slowest_trace_id, p.slowest_span_id
+        from grouped g
         left join pct p
-          on p.name is m.name and p.scope_name is m.scope_name
-         and p.split_value is m.split_value
-        left join slowest sl
-          on sl.name is m.name and sl.scope_name is m.scope_name
-         and sl.split_value is m.split_value and sl.rn = 1
-        group by m.name, m.scope_name, m.split_value
-        order by total_ms desc limit ?
+          on p.name is g.name and p.scope_name is g.scope_name
+         and p.split_value is g.split_value
+        order by g.total_ms desc limit ?
         """,
         params + [SPAN_GROUP_LIMIT + 1],
     )
