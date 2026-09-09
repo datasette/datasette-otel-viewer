@@ -62,16 +62,14 @@
     sort = nextSort(sort, key, NUMERIC_COLUMNS);
   }
 
+  /** Every filter, straight off the query the server echoed back: this page's
+   * model is filters and nothing else (EndpointsQuery), and the route reads
+   * them under these same names, so a filtered summary is a link you can
+   * paste. Derived from the object rather than a hand-kept list, so a new
+   * filter is shareable and reloadable the day it is added. */
   function syncUrl() {
     const params = new URLSearchParams();
-    for (const [key, value] of [
-      ["service", query.service],
-      ["path", query.path],
-      ["route", query.route],
-      ["method", query.method],
-      ["status", query.status],
-      ["min_duration_ms", query.min_duration_ms],
-    ] as [string, string | number | null | undefined][]) {
+    for (const [key, value] of Object.entries(query)) {
       if (value !== null && value !== undefined && value !== "") {
         params.set(key, String(value));
       }

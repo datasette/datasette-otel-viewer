@@ -56,15 +56,14 @@
     sort = nextSort(sort, key, NUMERIC_COLUMNS);
   }
 
+  /** Every filter, straight off the query the server echoed back: this page's
+   * model is filters and nothing else (SqlQueriesQuery), and the route reads
+   * them under these same names. Deriving the querystring from the object
+   * rather than a hand-kept list means a new filter is shareable and
+   * reloadable the day it is added -- `access` was not, briefly. */
   function syncUrl() {
     const params = new URLSearchParams();
-    for (const [key, value] of [
-      ["service", query.service],
-      ["sql", query.sql],
-      ["database", query.database],
-      ["operation", query.operation],
-      ["min_duration_ms", query.min_duration_ms],
-    ] as [string, string | number | null | undefined][]) {
+    for (const [key, value] of Object.entries(query)) {
       if (value !== null && value !== undefined && value !== "") {
         params.set(key, String(value));
       }

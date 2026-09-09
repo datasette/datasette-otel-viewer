@@ -214,6 +214,14 @@ async def test_read_write_split(make_ds):
         r["query"] for r in reads["queries"]
     }
 
+    # ...and it round-trips through the page URL, like every other filter.
+    page = page_data((await ds.client.get("/-/otel/sql?access=write")).text)
+    assert page["query"]["access"] == "write"
+    assert {r["query"] for r in page["queries"]} == {
+        "update [plants] set name = ?",
+        "apply_migrations.<locals>.fn",
+    }
+
     bad = await ds.client.post("/-/otel/api/sql/queries", json={"access": "sideways"})
     assert bad.status_code == 400
     assert "access must be" in bad.json()["error"]
