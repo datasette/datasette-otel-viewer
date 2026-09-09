@@ -6,61 +6,60 @@
   import { formatMs, formatRelativeTime } from "../../lib/time.ts";
   import { loadPageData } from "../../page_data/load.ts";
   import type {
-    SqlQueriesQuery,
-    SqlQueryRow,
-    SqlSummaryPageData,
-  } from "../../page_data/SqlSummaryPageData.types.ts";
+    SpanGroupRow,
+    SpansPageData,
+    SpansQuery,
+  } from "../../page_data/SpansPageData.types.ts";
 
   // The server answers the URL's filters and embeds the result (see
   // routes/pages.py); every control change re-runs it through the typed
-  // client, same shape as the HTTP endpoint page.
-  const initial = loadPageData<SqlSummaryPageData>();
+  // client, same shape as the HTTP and SQL summaries.
+  const initial = loadPageData<SpansPageData>();
   const client = makeClient();
 
   const TYPING_DELAY_MS = 350;
 
-  let queries = $state<SqlQueryRow[]>(initial.queries);
-  let query = $state<SqlQueriesQuery>({ ...initial.query });
-  let runCount = $state<number>(initial.run_count);
+  let spans = $state<SpanGroupRow[]>(initial.spans);
+  let query = $state<SpansQuery>({ ...initial.query });
+  let spanCount = $state<number>(initial.span_count);
   let totalMs = $state<number | null>(initial.total_ms ?? null);
   let truncated = $state<boolean>(initial.truncated ?? false);
-  let databases = $state<string[]>(initial.databases ?? []);
-  let operations = $state<string[]>(initial.operations ?? []);
+  let scopes = $state<string[]>(initial.scopes ?? []);
+  let kinds = $state<string[]>(initial.kinds ?? []);
   let services = $state<string[]>(initial.services ?? []);
+  let attributeKeys = $state<string[]>(initial.attribute_keys ?? []);
   let loading = $state(false);
   let error = $state<string | null>(null);
 
-  let sqlText = $state<string>(initial.query.sql ?? "");
+  let nameText = $state<string>(initial.query.name ?? "");
   let minMsText = $state<string>(
     initial.query.min_duration_ms == null
       ? ""
       : String(initial.query.min_duration_ms),
   );
 
-  // The whole list arrives in one response (SQL_QUERY_LIMIT), so sorting the
-  // loaded rows sorts everything -- see lib/sort.ts.
+  // The whole catalogue arrives in one response (SPAN_GROUP_LIMIT), so
+  // sorting the loaded rows sorts everything -- see lib/sort.ts.
   const NUMERIC_COLUMNS = new Set([
-    "run_count",
+    "span_count",
+    "trace_count",
     "error_count",
     "total_ms",
     "p50_ms",
     "p95_ms",
     "max_ms",
-    "max_rows",
     "last_seen_ns",
   ]);
   let sort = $state<SortState>({ key: null, dir: "desc" });
-  const sortedQueries = $derived(sortRows(queries, sort));
+  const sortedSpans = $derived(sortRows(spans, sort));
 
   function handleSort(key: string) {
     sort = nextSort(sort, key, NUMERIC_COLUMNS);
   }
 
-  /** Every filter, straight off the query the server echoed back: this page's
-   * model is filters and nothing else (SqlQueriesQuery), and the route reads
-   * them under these same names. Deriving the querystring from the object
-   * rather than a hand-kept list means a new filter is shareable and
-   * reloadable the day it is added -- `access` was not, briefly. */
+  /** Every filter, straight off the query the server echoed back: this
+   * page's model is filters and nothing else (SpansQuery), and the route
+   * reads them under these same names. */
   function syncUrl() {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(query)) {
@@ -76,32 +75,33 @@
     loading = true;
     error = null;
     const { data, error: apiError } = await client.POST(
-      "/-/otel/api/sql/queries",
+      "/-/otel/api/spans/groups",
       { body: query },
     );
     if (apiError || !data) {
       error = apiError ? JSON.stringify(apiError) : "Request failed";
     } else {
-      queries = data.queries;
-      runCount = data.run_count;
+      spans = data.spans;
+      spanCount = data.span_count;
       totalMs = data.total_ms ?? null;
       truncated = data.truncated ?? false;
-      databases = data.databases ?? [];
-      operations = data.operations ?? [];
+      scopes = data.scopes ?? [];
+      kinds = data.kinds ?? [];
       services = data.services ?? [];
+      attributeKeys = data.attribute_keys ?? [];
       query = { ...data.query };
       syncUrl();
     }
     loading = false;
   }
 
-  function update(changes: Partial<SqlQueriesQuery>) {
+  function update(changes: Partial<SpansQuery>) {
     query = { ...query, ...changes };
     load();
   }
 
   let typingTimer: ReturnType<typeof setTimeout> | undefined;
-  function updateAfterTyping(changes: () => Partial<SqlQueriesQuery> | null) {
+  function updateAfterTyping(changes: () => Partial<SpansQuery> | null) {
     clearTimeout(typingTimer);
     typingTimer = setTimeout(() => {
       const changed = changes();
@@ -109,8 +109,8 @@
     }, TYPING_DELAY_MS);
   }
 
-  function onSqlInput() {
-    updateAfterTyping(() => ({ sql: sqlText.trim() || null }));
+  function onNameInput() {
+    updateAfterTyping(() => ({ name: nameText.trim() || null }));
   }
 
   function onMinMsInput() {
@@ -123,84 +123,110 @@
     });
   }
 
-  /** Straight to the slowest run of this statement, in its own waterfall:
-   * the span anchor opens the inspector on it (see TraceDetailPage). */
-  function slowestUrl(row: SqlQueryRow): string | null {
+  /** Straight to the slowest span of this kind, in its own waterfall. */
+  function slowestUrl(row: SpanGroupRow): string | null {
     if (!row.slowest_trace_id || !row.slowest_span_id) return null;
     return `/-/otel/traces/${row.slowest_trace_id}#span-${row.slowest_span_id}`;
   }
 
-  function open(row: SqlQueryRow) {
+  function open(row: SpanGroupRow) {
     const url = slowestUrl(row);
     if (url) window.location.href = url;
   }
 
+  /** db.query spans have a page of their own, broken down by statement
+   * rather than by span name. */
+  function sqlUrl(row: SpanGroupRow): string | null {
+    return row.name === "db.query" ? "/-/otel/sql" : null;
+  }
+
   const fmt = new Intl.NumberFormat();
+  const perTrace = (row: SpanGroupRow) =>
+    row.trace_count === 0
+      ? "—"
+      : (row.span_count / row.trace_count).toFixed(
+          row.span_count % row.trace_count === 0 ? 0 : 1,
+        );
 </script>
 
-<main class="sql">
-  <Breadcrumbs trail={[{ label: "SQL queries" }]} />
+<main class="spans">
+  <Breadcrumbs trail={[{ label: "Spans" }]} />
   <h1>
-    SQL queries
+    Spans
     <a class="dim" href="/-/otel/traces">Traces &rarr;</a>
     <a class="dim" href="/-/otel/http">HTTP endpoints &rarr;</a>
-    <a class="dim" href="/-/otel/spans">Spans &rarr;</a>
+    <a class="dim" href="/-/otel/sql">SQL &rarr;</a>
     <a class="dim" href="/-/otel/metrics">Metrics &rarr;</a>
   </h1>
 
   <p class="lede">
-    One row per statement, over every time this instance ran it, ordered by the
-    total time it accounts for: a fast query run thousands of times outweighs a
-    slow one run twice. Callback-style reads (<code>execute_fn</code>) carry no
-    SQL text and are listed under the callback's name. Open a row to land on its
-    slowest run in the waterfall.
+    Every kind of work this instance records, grouped by span name and by the
+    instrumentation <strong>scope</strong> that emitted it — which is what keeps
+    a plugin's spans (<code>datasette_cron.run</code>, scope
+    <code>datasette_cron</code>) together and apart from Datasette's own. Most
+    of these are nested inside a trace rather than starting one; use
+    <em>Split by</em> to break a row down by one of its attributes, and open a row
+    to land on its slowest span in the waterfall.
   </p>
 
   <div class="controls">
     <label class="grow">
-      SQL contains
+      Name contains
       <input
         type="search"
-        placeholder="from plants"
-        bind:value={sqlText}
-        oninput={onSqlInput}
+        placeholder="db.query"
+        bind:value={nameText}
+        oninput={onNameInput}
       />
     </label>
 
     <label>
-      Reads/writes
+      Scope
       <select
-        value={query.access ?? ""}
-        onchange={(e) => update({ access: e.currentTarget.value || null })}
+        value={query.scope ?? ""}
+        onchange={(e) => update({ scope: e.currentTarget.value || null })}
       >
         <option value="">All</option>
-        <option value="read">Reads</option>
-        <option value="write">Writes</option>
-      </select>
-    </label>
-
-    <label>
-      Database
-      <select
-        value={query.database ?? ""}
-        onchange={(e) => update({ database: e.currentTarget.value || null })}
-      >
-        <option value="">All</option>
-        {#each databases as d (d)}
-          <option value={d}>{d}</option>
+        {#each scopes as scope (scope)}
+          <option value={scope}>{scope}</option>
         {/each}
       </select>
     </label>
 
     <label>
-      Operation
+      Kind
       <select
-        value={query.operation ?? ""}
-        onchange={(e) => update({ operation: e.currentTarget.value || null })}
+        value={query.kind ?? ""}
+        onchange={(e) => update({ kind: e.currentTarget.value || null })}
       >
         <option value="">Any</option>
-        {#each operations as op (op)}
-          <option value={op}>{op}</option>
+        {#each kinds as kind (kind)}
+          <option value={kind}>{kind}</option>
+        {/each}
+      </select>
+    </label>
+
+    <label>
+      Nesting
+      <select
+        value={query.nesting ?? ""}
+        onchange={(e) => update({ nesting: e.currentTarget.value || null })}
+      >
+        <option value="">All spans</option>
+        <option value="nested">Nested only</option>
+        <option value="root">Roots only</option>
+      </select>
+    </label>
+
+    <label>
+      Split by
+      <select
+        value={query.split_by ?? ""}
+        onchange={(e) => update({ split_by: e.currentTarget.value || null })}
+      >
+        <option value="">Nothing</option>
+        {#each attributeKeys as key (key)}
+          <option value={key}>{key}</option>
         {/each}
       </select>
     </label>
@@ -239,22 +265,32 @@
   </div>
 
   {#if error}
-    <p class="error">Failed to load queries: {error}</p>
+    <p class="error">Failed to load spans: {error}</p>
   {/if}
 
   <table>
     <thead>
       <tr>
-        <SortHeader key="query" label="Statement" {sort} onsort={handleSort} />
+        <SortHeader key="name" label="Span" {sort} onsort={handleSort} />
+        <SortHeader key="scope" label="Scope" {sort} onsort={handleSort} />
+        {#if query.split_by}
+          <SortHeader
+            key="split_value"
+            label={query.split_by}
+            {sort}
+            onsort={handleSort}
+          />
+        {/if}
         <SortHeader
-          key="database"
-          label="Database"
+          key="span_count"
+          label="Spans"
+          numeric
           {sort}
           onsort={handleSort}
         />
         <SortHeader
-          key="run_count"
-          label="Runs"
+          key="trace_count"
+          label="Traces"
           numeric
           {sort}
           onsort={handleSort}
@@ -295,13 +331,6 @@
           onsort={handleSort}
         />
         <SortHeader
-          key="max_rows"
-          label="Rows"
-          numeric
-          {sort}
-          onsort={handleSort}
-        />
-        <SortHeader
           key="last_seen_ns"
           label="Last seen"
           {sort}
@@ -310,27 +339,32 @@
       </tr>
     </thead>
     <tbody>
-      {#each sortedQueries as row (`${row.database} ${row.query}`)}
+      {#each sortedSpans as row (`${row.scope} ${row.name} ${row.split_value}`)}
         <tr class="row-link" onclick={() => open(row)}>
-          <td class="statement">
-            {#if row.is_write}
-              <span class="tag write" title="Ran through the write path"
-                >write</span
+          <td class="span-name">
+            {#if row.kind && row.kind !== "INTERNAL"}
+              <span class="tag">{row.kind}</span>
+            {/if}
+            <code title={row.name}>{row.name}</code>
+            {#if sqlUrl(row)}
+              <a
+                class="dim by-statement"
+                href={sqlUrl(row)}
+                onclick={(e) => e.stopPropagation()}>by statement &rarr;</a
               >
             {/if}
-            {#if row.callback}
-              <span class="tag" title="A callback, not a SQL string"
-                >callback</span
-              >
-            {:else if row.operation}
-              <span class="tag">{row.operation}</span>
-            {/if}
-            <code title={row.query}
-              >{row.query}{row.text_truncated ? "…" : ""}</code
+          </td>
+          <td class="mono dim">{row.scope ?? "—"}</td>
+          {#if query.split_by}
+            <td class="mono">{row.split_value ?? "—"}</td>
+          {/if}
+          <td class="num">
+            {fmt.format(row.span_count)}
+            <span class="dim per-trace" title="Spans per trace"
+              >&times;{perTrace(row)}</span
             >
           </td>
-          <td>{row.database ?? "—"}</td>
-          <td class="num">{fmt.format(row.run_count)}</td>
+          <td class="num">{fmt.format(row.trace_count)}</td>
           <td class="num">
             {#if row.error_count > 0}
               <span class="status-error">{row.error_count}</span>
@@ -345,7 +379,7 @@
             {#if slowestUrl(row)}
               <a
                 href={slowestUrl(row)}
-                title="Jump to this run in its trace"
+                title="Jump to this span in its trace"
                 onclick={(e) => e.stopPropagation()}
                 >{formatMs(row.max_ms ?? null)}</a
               >
@@ -353,7 +387,6 @@
               {formatMs(row.max_ms ?? null)}
             {/if}
           </td>
-          <td class="num">{row.max_rows ?? "—"}</td>
           <td class="dim">
             {row.last_seen_ns == null
               ? "—"
@@ -362,10 +395,10 @@
         </tr>
       {:else}
         <tr>
-          <td colspan="10" class="empty">
-            {runCount === 0 && !query.sql && !query.database
-              ? "No SQL recorded yet — browse a few pages, then refresh."
-              : "No statements match these filters."}
+          <td colspan="11" class="empty">
+            {spanCount === 0 && !query.name && !query.scope
+              ? "No spans recorded yet — make a request, then refresh."
+              : "No spans match these filters."}
           </td>
         </tr>
       {/each}
@@ -373,16 +406,15 @@
   </table>
 
   <p class="dim summary">
-    {fmt.format(runCount)} run{runCount === 1 ? "" : "s"}
+    {fmt.format(spanCount)} span{spanCount === 1 ? "" : "s"}
     {#if totalMs != null}
-      &middot; {formatMs(totalMs)} ms of database time
+      &middot; {formatMs(totalMs)} ms of span time
     {/if}
-    &middot; {fmt.format(queries.length)} statement{queries.length === 1
-      ? ""
-      : "s"}
+    &middot; {fmt.format(spans.length)} row{spans.length === 1 ? "" : "s"}
     {#if truncated}
-      (only the {fmt.format(queries.length)} costliest are listed)
+      (only the {fmt.format(spans.length)} costliest are listed)
     {/if}
+    &middot; nested spans overlap their parents, so the total double-counts
   </p>
 
   <p class="dim raw-links">
@@ -401,7 +433,7 @@
   }
   .lede {
     margin: 0 0 1rem;
-    max-width: 72ch;
+    max-width: 78ch;
     font-size: 0.9rem;
     color: #555;
   }
@@ -420,7 +452,7 @@
     gap: 0.25rem;
   }
   .controls label.grow {
-    flex: 1 1 18rem;
+    flex: 1 1 14rem;
   }
   .controls input,
   .controls select,
@@ -434,7 +466,7 @@
     gap: 0.3rem;
   }
   .suffixed input {
-    width: 6rem;
+    width: 5.5rem;
   }
   .error {
     color: #b00020;
@@ -450,19 +482,18 @@
     border-bottom: 1px solid #e2e2e2;
     white-space: nowrap;
   }
-  td.statement {
+  td.span-name {
     white-space: normal;
-    max-width: 44rem;
-  }
-  td.statement code {
-    /* Two lines of SQL, the rest on hover: the store keeps the full text. */
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    font-size: 0.85em;
+    max-width: 32rem;
     word-break: break-word;
+  }
+  td.span-name code {
+    font-size: 0.85em;
+  }
+  .by-statement {
+    font-size: 0.75rem;
+    margin-left: 0.4rem;
+    white-space: nowrap;
   }
   .tag {
     display: inline-block;
@@ -476,10 +507,9 @@
     color: #555;
     vertical-align: 1px;
   }
-  .tag.write {
-    background: #fdf1e3;
-    border-color: #e8d5b7;
-    color: #8a5a1b;
+  .per-trace {
+    font-size: 0.75rem;
+    margin-left: 0.3rem;
   }
   td.num {
     text-align: right;

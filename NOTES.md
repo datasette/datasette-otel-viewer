@@ -186,6 +186,37 @@ plus whatever else was narrowing the summary, so the trace list shows exactly
 the requests the row counted; the list renders those as chips you can drop
 one at a time, since the controls for them live on this page.
 
+#### Spans
+
+![Span catalogue](docs/screenshots/spans.png)
+
+`/-/otel/spans` is the catalogue of *everything* recorded, most of it nested
+rather than root: one row per span name and instrumentation **scope**, with
+span count, traces the spans appear in (and so how many happen per trace),
+errors, total, p50/p95/max and last seen. The Max cell jumps to that span in
+its waterfall.
+
+Scope is half the key on purpose — it is the library that created the span,
+so a plugin's spans group together and apart from Datasette's own without
+this plugin knowing any of their names:
+
+```
+datasette         db.query              1,096 spans   41 traces   307.9 ms
+datasette         db.query.execute      1,092 spans   41 traces   119.5 ms
+datasette_cron    datasette_cron.run       60 spans   60 traces    12.4 s
+datasette_cron    datasette_cron.tick     720 spans  720 traces     1.1 s
+```
+
+Filters: `?name=` (substring), `?scope=`, `?kind=` (SpanKind), `?nesting=`
+(`root` or `nested`), `?min_duration_ms=`, `?service=`, and **`?split_by=`** —
+an attribute key, which turns one row into one per value of it. That is what
+makes a plugin's spans explorable from here: `datasette_cron.run` split by
+`datasette_cron.task` is one row per task, with its own percentiles.
+
+The other summary pages are this one zoomed in on a particular kind of work:
+`/-/otel/http` on the request roots, `/-/otel/sql` on the `db.query` spans
+broken down by statement rather than by name.
+
 #### SQL queries
 
 ![SQL query summary](docs/screenshots/sql.png)

@@ -90,6 +90,7 @@
     <a class="dim" href="/-/otel/traces">Traces &rarr;</a>
     <a class="dim" href="/-/otel/http">HTTP endpoints &rarr;</a>
     <a class="dim" href="/-/otel/sql">SQL &rarr;</a>
+    <a class="dim" href="/-/otel/spans">Spans &rarr;</a>
   </h1>
 
   <div class="controls">

@@ -45,8 +45,8 @@ datasette_otel_viewer/
 ├── router.py                # Shared Router + check_viewer() decorator
 ├── page_data.py             # Pydantic models: page data + API request/response
 ├── queries.py               # Read-side SQL shared by pages and API
-├── routes/pages.py          # GET /-/otel (index), /traces, /traces/{trace_id}, /metrics, /metrics/{name} (HTML)
-├── routes/api.py            # POST /-/otel/api/traces/list, GET /-/otel/api/traces/{trace_id}
+├── routes/pages.py          # GET /-/otel (index), /traces, /traces/{trace_id}, /http, /sql, /spans, /metrics, /metrics/{name} (HTML)
+├── routes/api.py            # POST .../traces/list, http/endpoints, sql/queries, spans/groups, metrics/*; GET .../traces/{trace_id}
 ├── selfsource.py            # TracerProvider ownership + suppression sampler
 ├── selfmetrics.py           # MeterProvider ownership/attach + SDK metrics → rows
 ├── store.py                 # Schema, batch insert, retention
@@ -58,11 +58,14 @@ frontend/src/
 ├── pages/index/             # /-/otel landing page (IndexPage.svelte): counts + links
 ├── pages/traces_list/       # List page (TracesListPage.svelte)
 ├── pages/trace_detail/      # Waterfall + inspector (TraceDetailPage, WaterfallRow)
+├── pages/http_summary/      # /-/otel/http endpoints (HttpSummaryPage.svelte)
+├── pages/sql_summary/       # /-/otel/sql statements (SqlSummaryPage.svelte)
+├── pages/spans_summary/     # /-/otel/spans catalogue (SpansSummaryPage.svelte)
 ├── pages/metrics_list/      # Metrics table
 ├── pages/metric_detail/     # SveltePlot charts (SeriesChart, HistogramHeatmap, PercentileChart)
 ├── lib/traceTree.ts         # Span forest assembly (unit-tested), time.ts, sort.ts
 ├── lib/metricsMath.ts       # TS twin of metrics_math.py (shared test vectors), metricsSeries.ts
-├── components/SortHeader.svelte
+├── components/SortHeader.svelte, Breadcrumbs.svelte
 ├── page_data/load.ts        # loadPageData<T>()
 ├── api.ts                   # openapi-fetch client over api.d.ts
 └── app.css
@@ -136,10 +139,15 @@ the real `Annotated[..., Body()]` objects at decoration time.
   `/-/otel/traces` by handing over its own querystring. Percentiles in
   `http_endpoints` need two window definitions -- `count(*)` over an ordered
   window is a running count, which silently collapses every percentile onto
-  the minimum. `sql_queries` aggregates spans rather than traces (its own
+  the minimum -- all three summaries read them through `_percentile_ctes()`.
+  `sql_queries` aggregates spans rather than traces (its own
   `SqlFilters`/`_sql_where`, since path/status/method mean nothing there) and
   keys rows on `coalesce(db_query_text, datasette.callback)` so callback work
-  is counted, not dropped.
+  is counted, not dropped. `span_groups` is the general case of both: any
+  span, keyed on name + `scope_name` (the plugin that emitted it), with
+  `split_by` breaking a row down by an attribute -- that key reaches a JSON
+  path, so it is bound as `?1` *and* pattern-checked in
+  `page_data.SpanFilters`.
 - The traces list's `?root=` filter buckets traces by root span --
   `queries.root_kinds` derives the buckets from the store (HTTP roots
   collapsed, everything else by span name and instrumentation scope), so

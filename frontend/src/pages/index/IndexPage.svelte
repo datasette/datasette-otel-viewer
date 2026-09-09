@@ -42,6 +42,13 @@
       <h2>SQL queries &rarr;</h2>
       <p>Every statement this instance ran, by the time it accounts for.</p>
     </a>
+    <a class="card" href="/-/otel/spans">
+      <h2>Spans &rarr;</h2>
+      <p>
+        Every kind of work recorded, by span name and the plugin that emitted
+        it.
+      </p>
+    </a>
     <a class="card" href="/-/otel/metrics">
       <h2>Metrics &rarr;</h2>
       <p>Counters, gauges and histograms charted over time.</p>

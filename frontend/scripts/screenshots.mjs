@@ -151,7 +151,7 @@ const IDS = {
   datasetteTraceId: "a1".padStart(32, "0"),
   slowQuerySpanId: "1003".padStart(16, "0"),
 };
-const SEEDED_TRACES = 4;
+const SEEDED_TRACES = 5;
 
 // The startup hook finishes before the server accepts connections, so the
 // rows are already there by the time reachable() succeeds — but poll anyway
@@ -262,6 +262,18 @@ function buildShots(browser, ids) {
         .first()
         .waitFor({ timeout: 15_000 });
       await page.screenshot({ path: out("sql") });
+      await ctx.close();
+    },
+
+    // The span catalogue: every kind of work in the seeded traces.
+    spans: async () => {
+      const { ctx, page } = await newPage(browser);
+      await page.goto(`${BASE}/-/otel/spans`);
+      await page
+        .locator("main.spans tbody tr.row-link")
+        .first()
+        .waitFor({ timeout: 15_000 });
+      await page.screenshot({ path: out("spans") });
       await ctx.close();
     },
 

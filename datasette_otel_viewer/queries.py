@@ -10,11 +10,15 @@ from . import metrics_math, store
 from .page_data import (
     ACCESS_READ,
     ACCESS_WRITE,
+    ATTRIBUTE_SAMPLE,
     ENDPOINT_LIMIT,
+    NESTING_NESTED,
+    NESTING_ROOT,
     POINT_LIMIT,
     ROOT_HTTP,
     ROOT_NONE,
     ROUTE_NONE,
+    SPAN_GROUP_LIMIT,
     SPAN_LIMIT,
     SQL_QUERY_LIMIT,
     SQL_TEXT_LIMIT,
@@ -28,7 +32,11 @@ from .page_data import (
     MetricSummaryRow,
     Series,
     SeriesPoint,
+    SpanFilters,
+    SpanGroupRow,
     SpanRow,
+    SpansQuery,
+    SpansResponse,
     SqlFilters,
     SqlQueriesQuery,
     SqlQueriesResponse,
@@ -201,25 +209,7 @@ async def http_endpoints(datasette, query: EndpointsQuery) -> EndpointsResponse:
     result = await db.execute(
         f"""
         with http as ({matching}),
-        ranked as (
-          select http_method, http_route, duration_ms,
-                 row_number() over ranked_w as rn, count(*) over whole_w as n
-          from http where duration_ms is not null
-          -- Two windows on purpose: an ORDER BY window frames rows up to the
-          -- current one, so count(*) over the *ordered* window would be a
-          -- running count -- every row would look like the last one and every
-          -- percentile would collapse onto the minimum.
-          window ranked_w as (
-                   partition by http_method, http_route order by duration_ms
-                 ),
-                 whole_w as (partition by http_method, http_route)
-        ),
-        pct as (
-          select http_method, http_route,
-                 min(case when rn >= 0.5 * n then duration_ms end) as p50,
-                 min(case when rn >= 0.95 * n then duration_ms end) as p95
-          from ranked group by http_method, http_route
-        )
+        {_percentile_ctes("http", "http_method, http_route")}
         select h.http_method as method, h.http_route as route,
                count(*) as request_count,
                sum(case when h.http_status >= 500 or h.error_count > 0
@@ -562,21 +552,7 @@ async def sql_queries(datasette, query: SqlQueriesQuery) -> SqlQueriesResponse:
     result = await db.execute(
         f"""
         with sql_spans as ({spans}),
-        ranked as (
-          select db_namespace, statement, duration_ms,
-                 row_number() over ranked_w as rn, count(*) over whole_w as n
-          from sql_spans where duration_ms is not null
-          window ranked_w as (
-                   partition by db_namespace, statement order by duration_ms
-                 ),
-                 whole_w as (partition by db_namespace, statement)
-        ),
-        pct as (
-          select db_namespace, statement,
-                 min(case when rn >= 0.5 * n then duration_ms end) as p50,
-                 min(case when rn >= 0.95 * n then duration_ms end) as p95
-          from ranked group by db_namespace, statement
-        ),
+        {_percentile_ctes("sql_spans", "db_namespace, statement")},
         slowest as (
           select db_namespace, statement, trace_id, span_id,
                  row_number() over (
@@ -639,6 +615,203 @@ async def sql_queries(datasette, query: SqlQueriesQuery) -> SqlQueriesResponse:
         run_count=totals["run_count"] or 0,
         total_ms=totals["total_ms"],
         truncated=len(rows) > SQL_QUERY_LIMIT,
+    )
+
+
+def _percentile_ctes(source: str, partition: str) -> str:
+    """``ranked``/``pct`` CTEs over ``source``, giving nearest-rank p50 and
+    p95 per group. Every summary page reads its percentiles this way: the
+    durations are all in the store, so there is nothing to estimate.
+
+    The two window definitions are load-bearing. ``count(*)`` over the
+    *ordered* window is a running count -- with it, every row's rank reaches
+    half its group and both percentiles collapse onto the minimum."""
+    return f"""
+    ranked as (
+      select {partition}, duration_ms,
+             row_number() over ranked_w as rn, count(*) over whole_w as n
+      from {source} where duration_ms is not null
+      window ranked_w as (partition by {partition} order by duration_ms),
+             whole_w as (partition by {partition})
+    ),
+    pct as (
+      select {partition},
+             min(case when rn >= 0.5 * n then duration_ms end) as p50,
+             min(case when rn >= 0.95 * n then duration_ms end) as p95
+      from ranked group by {partition}
+    )"""
+
+
+# Any span, with the pieces the catalogue groups and filters by. `split_value`
+# is the split_by attribute's value, or NULL when not splitting -- bound as a
+# parameter and reduced to a JSON path, never concatenated raw (the key is
+# also pattern-checked in page_data.SpanFilters).
+_SPAN_GROUPS_SQL = """
+  select s.span_id, s.trace_id, s.name, s.kind, s.scope_name, s.service_name,
+         s.parent_span_id, s.start_ns, s.duration_ms, s.status,
+         case when ?1 is null then null
+              else json_extract(s.attributes, '$."' || ?1 || '"') end
+           as split_value
+  from spans s
+  {where}
+"""
+
+
+def _span_where(filters: SpanFilters) -> tuple[str, list]:
+    "``(where clause, params)`` for a SpanFilters, over _SPAN_GROUPS_SQL."
+    clauses: list[str] = []
+    params: list = []
+    if filters.service:
+        clauses.append("s.service_name = ?")
+        params.append(filters.service)
+    if filters.scope:
+        clauses.append("s.scope_name = ?")
+        params.append(filters.scope)
+    if filters.name:
+        clauses.append("s.name like ? escape '\\'")
+        params.append(_like_param(filters.name))
+    if filters.kind:
+        clauses.append("upper(s.kind) = ?")
+        params.append(filters.kind.upper())
+    if filters.nesting == NESTING_ROOT:
+        clauses.append("s.parent_span_id is null")
+    elif filters.nesting == NESTING_NESTED:
+        clauses.append("s.parent_span_id is not null")
+    if filters.min_duration_ms is not None:
+        clauses.append("s.duration_ms >= ?")
+        params.append(filters.min_duration_ms)
+    if not clauses:
+        return "", params
+    return "where " + " and ".join(clauses), params
+
+
+def _span_source(query: SpansQuery) -> tuple[str, list]:
+    """The matching-spans SQL and its params. ``split_by`` is parameter 1
+    throughout (``?1``), so the rest keep their order whether or not a split
+    is on."""
+    where, params = _span_where(query)
+    return _SPAN_GROUPS_SQL.format(where=where), [query.split_by] + params
+
+
+async def span_attribute_keys(datasette, query: SpansQuery) -> list[str]:
+    """Attribute keys on the newest matching spans: what ``split_by`` can be
+    set to. Bounded by ATTRIBUTE_SAMPLE spans because attributes are JSON --
+    every key here is one a row in view actually carries."""
+    db = datasette.get_database(store.db_name(datasette))
+    source, params = _span_source(query.model_copy(update={"split_by": None}))
+    result = await db.execute(
+        f"""
+        select distinct j.key from (
+          select span_id, attributes from spans s
+          where s.span_id in (select span_id from ({source})
+                              order by start_ns desc limit ?)
+        ) p, json_each(p.attributes) j
+        order by j.key limit 200
+        """,
+        params + [ATTRIBUTE_SAMPLE],
+    )
+    return [r["key"] for r in result.rows]
+
+
+async def _span_facet(datasette, query: SpansQuery, column: str) -> list[str]:
+    "Distinct values of one column under every filter except that column's."
+    db = datasette.get_database(store.db_name(datasette))
+    field = {"scope_name": "scope", "kind": "kind"}[column]
+    source, params = _span_source(
+        query.model_copy(update={field: None, "split_by": None})
+    )
+    result = await db.execute(
+        f"select distinct {column} from ({source}) "
+        f"where {column} is not null order by 1 limit 100",
+        params,
+    )
+    return [r[column] for r in result.rows]
+
+
+async def span_groups(datasette, query: SpansQuery) -> SpansResponse:
+    """The span catalogue behind ``/-/otel/spans``: every kind of work this
+    instance records, grouped by instrumentation scope and span name and
+    ordered by the time it accounts for.
+
+    Scope is half the key on purpose. It is the library that created the span,
+    so a plugin's spans (``datasette_cron.run``, scope ``datasette_cron``)
+    group together and apart from Datasette's own -- without this plugin
+    knowing any of their names. ``split_by`` breaks one row into one per value
+    of an attribute, which is how that run becomes one row per cron task.
+    """
+    db = datasette.get_database(store.db_name(datasette))
+    source, params = _span_source(query)
+    totals = (
+        await db.execute(
+            f"select count(*) as span_count, sum(duration_ms) as total_ms "
+            f"from ({source})",
+            params,
+        )
+    ).first()
+    partition = "name, scope_name, split_value"
+    result = await db.execute(
+        f"""
+        with matching as ({source}),
+        {_percentile_ctes("matching", partition)},
+        slowest as (
+          select {partition}, trace_id, span_id,
+                 row_number() over (
+                   partition by {partition} order by duration_ms desc, span_id
+                 ) as rn
+          from matching
+        )
+        select m.name as name, m.scope_name as scope, max(m.kind) as kind,
+               m.split_value as split_value,
+               count(*) as span_count,
+               count(distinct m.trace_id) as trace_count,
+               sum(m.status = 'ERROR') as error_count,
+               sum(m.duration_ms) as total_ms, max(m.duration_ms) as max_ms,
+               max(m.start_ns) as last_seen_ns,
+               max(p.p50) as p50_ms, max(p.p95) as p95_ms,
+               max(sl.trace_id) as slowest_trace_id,
+               max(sl.span_id) as slowest_span_id
+        from matching m
+        left join pct p
+          on p.name is m.name and p.scope_name is m.scope_name
+         and p.split_value is m.split_value
+        left join slowest sl
+          on sl.name is m.name and sl.scope_name is m.scope_name
+         and sl.split_value is m.split_value and sl.rn = 1
+        group by m.name, m.scope_name, m.split_value
+        order by total_ms desc limit ?
+        """,
+        params + [SPAN_GROUP_LIMIT + 1],
+    )
+    rows = list(result.rows)
+    spans = [
+        SpanGroupRow(
+            name=r["name"],
+            scope=r["scope"],
+            kind=r["kind"],
+            split_value=None if r["split_value"] is None else str(r["split_value"]),
+            span_count=r["span_count"],
+            trace_count=r["trace_count"],
+            error_count=r["error_count"] or 0,
+            total_ms=r["total_ms"],
+            p50_ms=r["p50_ms"],
+            p95_ms=r["p95_ms"],
+            max_ms=r["max_ms"],
+            last_seen_ns=r["last_seen_ns"],
+            slowest_trace_id=r["slowest_trace_id"],
+            slowest_span_id=r["slowest_span_id"],
+        )
+        for r in rows[:SPAN_GROUP_LIMIT]
+    ]
+    return SpansResponse(
+        spans=spans,
+        query=query,
+        scopes=await _span_facet(datasette, query, "scope_name"),
+        kinds=await _span_facet(datasette, query, "kind"),
+        services=await list_services(datasette),
+        attribute_keys=await span_attribute_keys(datasette, query),
+        span_count=totals["span_count"] or 0,
+        total_ms=totals["total_ms"],
+        truncated=len(rows) > SPAN_GROUP_LIMIT,
     )
 
 

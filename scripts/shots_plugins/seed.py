@@ -29,8 +29,13 @@ NOW_NS = int(NOW.timestamp() * 1_000_000_000)
 SERVICE = "datasette"
 RESOURCE = {"service.name": SERVICE, "service.version": "1.0a39"}
 RESOURCE_JSON = json.dumps(RESOURCE)
-SCOPE_NAME = "screenshots"
-SCOPE_VERSION = "0"
+# The instrumentation scope Datasette's own tracer uses (telemetry.py:
+# get_tracer("datasette", ...)). A plugin's spans carry its own instead --
+# see cron_trace() -- which is what the span catalogue groups by, so the
+# shots have to be honest about it.
+SCOPE_NAME = "datasette"
+SCOPE_VERSION = "1.0a39"
+CRON_SCOPE = "datasette_cron"
 
 
 # JS Math.round semantics (half away from zero for positives): the seed data
@@ -57,6 +62,7 @@ def span(
     kind="INTERNAL",
     attrs=None,
     error=None,
+    scope=SCOPE_NAME,
 ):
     attrs = attrs or {}
     span_id = format(_next_span[0], "016x")
@@ -80,7 +86,7 @@ def span(
         "db_query_text": attrs.get("db.query.text"),
         "attributes": json.dumps(attrs),
         "resource": RESOURCE_JSON,
-        "scope_name": SCOPE_NAME,
+        "scope_name": scope,
         "scope_version": SCOPE_VERSION,
     }
 
@@ -253,6 +259,41 @@ def startup_trace():
     return [root, plugins, pragma]
 
 
+def cron_trace():
+    """Trace E: a plugin's own root span, under its own instrumentation scope.
+    datasette-cron shaped (`datasette_cron.run` with the task on it), so the
+    span catalogue and the root-kind filter both have a plugin to show."""
+    trace = format(0xE5, "032x")
+    task = {"datasette_cron.task": "vacuum-analytics"}
+    run = span(
+        trace,
+        "datasette_cron.run",
+        1_500_000,
+        18.4,
+        scope=CRON_SCOPE,
+        attrs={**task, "datasette_cron.trigger": "schedule"},
+    )
+    attempt = span(
+        trace,
+        "datasette_cron.attempt",
+        1_499_996,
+        14.1,
+        parent=run["span_id"],
+        scope=CRON_SCOPE,
+        attrs={**task, "datasette_cron.attempt": 1},
+    )
+    query = span(
+        trace,
+        "db.query",
+        1_499_990,
+        9.2,
+        parent=attempt["span_id"],
+        kind="CLIENT",
+        attrs=sql_attrs("demo", "SELECT", "select count(*) from [plants]"),
+    )
+    return [run, attempt, query]
+
+
 def trace_rows():
     # Trace A first: its span ids must stay 0x1000-0x1005.
     return [
@@ -260,6 +301,7 @@ def trace_rows():
         *json_api_trace(),
         *bad_query_trace(),
         *startup_trace(),
+        *cron_trace(),
     ]
 
 

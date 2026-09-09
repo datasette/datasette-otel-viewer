@@ -14,6 +14,8 @@ from ..page_data import (
     MetricsListPageData,
     MetricsListQuery,
     OtelIndexPageData,
+    SpansPageData,
+    SpansQuery,
     SqlQueriesQuery,
     SqlSummaryPageData,
     TraceDetailPageData,
@@ -32,6 +34,7 @@ SECTIONS = {
     "traces": ("/-/otel/traces", "Traces"),
     "http": ("/-/otel/http", "HTTP endpoints"),
     "sql": ("/-/otel/sql", "SQL queries"),
+    "spans": ("/-/otel/spans", "Spans"),
     "metrics": ("/-/otel/metrics", "Metrics"),
 }
 
@@ -213,6 +216,42 @@ async def sql_summary_page(datasette, request):
         entrypoint="src/pages/sql_summary/index.ts",
         page_data=page_data,
         crumbs=_crumbs(datasette, section="sql"),
+    )
+
+
+def _span_filters(request) -> dict:
+    "``?service=&scope=&name=&kind=&nesting=&min_duration_ms=&split_by=``."
+    args = request.args
+    return {
+        "service": args.get("service") or None,
+        "scope": args.get("scope") or None,
+        "name": args.get("name") or None,
+        "kind": args.get("kind") or None,
+        "nesting": args.get("nesting") or None,
+        "min_duration_ms": args.get("min_duration_ms") or None,
+        "split_by": args.get("split_by") or None,
+    }
+
+
+@router.GET(r"^/-/otel/spans$")
+@check_viewer()
+async def spans_summary_page(datasette, request):
+    try:
+        query = SpansQuery(**_span_filters(request))
+    except ValidationError as error:
+        return Response.text(f"Bad span filter: {error}", status=400)
+    summary = await queries.span_groups(datasette, query)
+    page_data = SpansPageData(
+        **summary.model_dump(),
+        database=store.db_name(datasette),
+    )
+    return await _render(
+        datasette,
+        request,
+        title="Spans",
+        entrypoint="src/pages/spans_summary/index.ts",
+        page_data=page_data,
+        crumbs=_crumbs(datasette, section="spans"),
     )
 
 

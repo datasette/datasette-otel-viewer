@@ -259,6 +259,113 @@ class SqlSummaryPageData(SqlQueriesResponse):
     database: str
 
 
+# One row per (scope, span name, split value). Span names are meant to be
+# low-cardinality; the cap is a guard against a plugin that puts an id in one.
+SPAN_GROUP_LIMIT = 200
+# How many of the newest matching spans are read for their attribute keys.
+# Attributes are JSON, so this is a scan: bounded, and biased to what is
+# happening now rather than what happened three days ago.
+ATTRIBUTE_SAMPLE = 1000
+
+# ``SpanFilters.kind``: OpenTelemetry's SpanKind, as span_to_row stores it.
+SPAN_KINDS = ("INTERNAL", "SERVER", "CLIENT", "PRODUCER", "CONSUMER")
+
+# ``SpanFilters.nesting``: roots are one trace each and already have their own
+# pages (/-/otel/traces, /-/otel/http); nested spans are the work inside them.
+NESTING_ROOT = "root"
+NESTING_NESTED = "nested"
+
+# ``SpanFilters.split_by`` is interpolated into a JSON path, so it is held to
+# the shape of an OTel attribute key (letters, digits, . _ - /) -- never a
+# quote, which is what could break out of the path.
+ATTRIBUTE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.\-/]{1,128}$")
+
+
+class SpanFilters(BaseModel):
+    "What ``/-/otel/spans`` can narrow by."
+
+    service: str | None = None
+    # Instrumentation scope: "datasette", "datasette_cron", ... -- the
+    # library that emitted the span, and so the plugin it belongs to.
+    scope: str | None = None
+    # Substring of the span name.
+    name: str | None = None
+    kind: str | None = None
+    # NESTING_ROOT or NESTING_NESTED.
+    nesting: str | None = None
+    min_duration_ms: float | None = Field(default=None, ge=0)
+    # An attribute key: rows split into one per distinct value of it, which is
+    # how "datasette_cron.run" becomes one row per task.
+    split_by: str | None = None
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.kind is not None and self.kind.upper() not in SPAN_KINDS:
+            raise ValueError(
+                f"kind must be one of {', '.join(SPAN_KINDS)}, not {self.kind!r}"
+            )
+        if self.nesting is not None and self.nesting not in (
+            NESTING_ROOT,
+            NESTING_NESTED,
+        ):
+            raise ValueError(
+                f'nesting must be "{NESTING_ROOT}" or "{NESTING_NESTED}", not '
+                f"{self.nesting!r}"
+            )
+        if self.split_by is not None and not ATTRIBUTE_KEY_PATTERN.match(self.split_by):
+            raise ValueError(f"split_by is not an attribute key: {self.split_by!r}")
+        return self
+
+
+class SpanGroupRow(BaseModel):
+    """One kind of work on ``/-/otel/spans``: every span sharing a name and an
+    instrumentation scope, with the stats of the spans behind it."""
+
+    name: str
+    # The library that emitted it. Datasette's own spans are "datasette"; a
+    # plugin's carry its own, which is what separates them here.
+    scope: str | None = None
+    kind: str | None = None
+    # The split_by attribute's value for this row, when splitting.
+    split_value: str | None = None
+    span_count: int
+    # Distinct traces these spans appear in: span_count / trace_count is how
+    # many times the work happens per trace.
+    trace_count: int
+    error_count: int
+    total_ms: float | None = None
+    p50_ms: float | None = None
+    p95_ms: float | None = None
+    max_ms: float | None = None
+    last_seen_ns: int | None = None
+    slowest_trace_id: str | None = None
+    slowest_span_id: str | None = None
+
+
+class SpansQuery(SpanFilters):
+    "Body of ``POST /-/otel/api/spans/groups``."
+
+
+class SpansResponse(BaseModel):
+    spans: list[SpanGroupRow]
+    query: SpansQuery
+    # Filter options under the *other* filters, facet-style.
+    scopes: list[str] = []
+    kinds: list[str] = []
+    services: list[str] = []
+    # Attribute keys seen on the matching spans: what split_by can be set to.
+    attribute_keys: list[str] = []
+    span_count: int
+    total_ms: float | None = None
+    truncated: bool = False
+
+
+class SpansPageData(SpansResponse):
+    "Embedded by ``GET /-/otel/spans``."
+
+    database: str
+
+
 # Reserved ``TracesQuery.root`` values: every other value is a root span
 # name. A plugin would have to name a *non-HTTP* root span literally "http"
 # or "none" to collide.
@@ -519,6 +626,7 @@ __exports__ = [
     TracesListPageData,
     HttpSummaryPageData,
     SqlSummaryPageData,
+    SpansPageData,
     TraceDetailPageData,
     MetricsListPageData,
     MetricDetailPageData,

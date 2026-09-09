@@ -214,6 +214,7 @@
     Traces
     <a class="dim" href="/-/otel/http">HTTP endpoints &rarr;</a>
     <a class="dim" href="/-/otel/sql">SQL &rarr;</a>
+    <a class="dim" href="/-/otel/spans">Spans &rarr;</a>
     <a class="dim" href="/-/otel/metrics">Metrics &rarr;</a>
   </h1>
 
