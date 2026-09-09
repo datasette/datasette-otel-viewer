@@ -240,6 +240,19 @@ function buildShots(browser, ids) {
       await ctx.close();
     },
 
+    // The HTTP endpoint summary: the seeded requests grouped by the route
+    // each matched, one of them errored.
+    http: async () => {
+      const { ctx, page } = await newPage(browser);
+      await page.goto(`${BASE}/-/otel/http`);
+      await page
+        .locator("main.http tbody tr.row-link")
+        .first()
+        .waitFor({ timeout: 15_000 });
+      await page.screenshot({ path: out("http") });
+      await ctx.close();
+    },
+
     // The waterfall for the Datasette request, with the slow query selected
     // so the inspector (attributes incl. db.query.text) is open.
     trace: async () => {

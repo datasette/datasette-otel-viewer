@@ -148,6 +148,34 @@ unknown sort column is a 400, like Datasette's own.
 
 Gated exactly like the pages (`datasette-otel-viewer`, or `public_viewer: true`).
 
+#### HTTP endpoints
+
+![HTTP endpoint summary](docs/screenshots/http.png)
+
+`/-/otel/http` is the same requests seen endpoint-first: one row per
+`(method, matched route)`, with request count, errors, p50/p95/max duration
+and when it was last seen. Route patterns are regexes, so the label is a
+readable rendering of one — `/{database}/{table}[.{format}]` — with the raw
+pattern in the tooltip. Percentiles are **exact**, nearest-rank over the
+stored durations: every request is in the store, so unlike the histogram
+metrics there is nothing to estimate.
+
+Filters — shared with the trace list, same names, same meaning:
+
+| Param | Means |
+|-------|-------|
+| `?path=` | the root span's `url.path` contains this (LIKE, wildcards escaped) |
+| `?status=` | `404` for a code, `4xx` for a class |
+| `?method=` | exact method |
+| `?min_duration_ms=` | trace duration at or above this |
+| `?route=` | exact route pattern, or `none` for requests that matched none |
+| `?service=` | as everywhere else |
+
+A row links through to `/-/otel/traces` carrying its own method and route
+plus whatever else was narrowing the summary, so the trace list shows exactly
+the requests the row counted; the list renders those as chips you can drop
+one at a time, since the controls for them live on this page.
+
 #### Filtering by what started the trace
 
 `?root=` (the **Root** dropdown) buckets traces by their root span. HTTP

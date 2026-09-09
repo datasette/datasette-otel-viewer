@@ -37,6 +37,7 @@
   let total = $state<number>(initial.total);
   let nextCursor = $state<string | null>(initial.next ?? null);
   let rootKinds = $state<TraceRootKind[]>(initial.root_kinds ?? []);
+  let routeLabel = $state<string | null>(initial.route_label ?? null);
   let loading = $state(false);
   let error = $state<string | null>(null);
 
@@ -60,6 +61,27 @@
   // same URL you started with instead of a redundant ?_next=0.
   const previousCursor = $derived(
     offset - size > 0 ? String(offset - size) : null,
+  );
+
+  /** The HTTP filters a drill-through from /-/otel/http arrives with. They
+   * have no controls here -- that page owns them -- so the list states what
+   * it is showing and each chip can drop its own filter. */
+  const filterChips = $derived(
+    (
+      [
+        ["path", query.path && `Endpoint contains “${query.path}”`],
+        ["route", query.route && `Route ${routeLabel ?? query.route}`],
+        ["method", query.method && `Method ${query.method}`],
+        ["status", query.status && `Status ${query.status}`],
+        [
+          "min_duration_ms",
+          query.min_duration_ms != null &&
+            `Slower than ${query.min_duration_ms} ms`,
+        ],
+      ] as [keyof TracesQuery, string | false | null | undefined][]
+    )
+      .filter(([, label]) => Boolean(label))
+      .map(([key, label]) => ({ key, label: label as string })),
   );
 
   // Root-filter options. The server counts the buckets that exist right now;
@@ -105,6 +127,17 @@
     const params = new URLSearchParams();
     if (query.service) params.set("service", query.service);
     if (query.root) params.set("root", query.root);
+    for (const [key, value] of [
+      ["path", query.path],
+      ["route", query.route],
+      ["method", query.method],
+      ["status", query.status],
+      ["min_duration_ms", query.min_duration_ms],
+    ] as [string, string | number | null | undefined][]) {
+      if (value !== null && value !== undefined && value !== "") {
+        params.set(key, String(value));
+      }
+    }
     if (query.sort) params.set("_sort", query.sort);
     else if (query.sort_desc && query.sort_desc !== DEFAULT_SORT_DESC)
       params.set("_sort_desc", query.sort_desc);
@@ -128,6 +161,7 @@
       total = data.total;
       nextCursor = data.next ?? null;
       rootKinds = data.root_kinds ?? [];
+      routeLabel = data.route_label ?? null;
       // The server normalises the query (an explicit default sort); take its
       // word for it so the headers and the URL agree with the rows.
       query = { ...data.query };
@@ -174,7 +208,11 @@
 </script>
 
 <main class="traces">
-  <h1>Traces <a class="dim" href="/-/otel/metrics">Metrics &rarr;</a></h1>
+  <h1>
+    Traces
+    <a class="dim" href="/-/otel/http">HTTP endpoints &rarr;</a>
+    <a class="dim" href="/-/otel/metrics">Metrics &rarr;</a>
+  </h1>
 
   <p class="lede">
     One row per trace, labelled by its <strong>root span</strong> — the request or
@@ -232,6 +270,35 @@
       {loading ? "Refreshing…" : "Refresh"}
     </button>
   </div>
+
+  {#if filterChips.length}
+    <div class="chips">
+      {#each filterChips as chip (chip.key)}
+        <span class="chip">
+          {chip.label}
+          <button
+            type="button"
+            title="Remove this filter"
+            onclick={() => update({ [chip.key]: null })}>&times;</button
+          >
+        </span>
+      {/each}
+      {#if filterChips.length > 1}
+        <button
+          type="button"
+          class="clear-all"
+          onclick={() =>
+            update({
+              path: null,
+              route: null,
+              method: null,
+              status: null,
+              min_duration_ms: null,
+            })}>Clear filters</button
+        >
+      {/if}
+    </div>
+  {/if}
 
   {#if error}
     <p class="error">Failed to load traces: {error}</p>
@@ -387,6 +454,37 @@
   .controls button {
     font-size: 0.9rem;
     padding: 0.35rem 0.5rem;
+  }
+  .chips {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin: -0.5rem 0 1rem;
+    font-size: 0.85rem;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: #eef2f6;
+    border: 1px solid #d7dee6;
+    border-radius: 1rem;
+    padding: 0.15rem 0.3rem 0.15rem 0.6rem;
+  }
+  .chip button {
+    all: unset;
+    cursor: pointer;
+    padding: 0 0.35rem;
+    color: #555;
+    line-height: 1;
+  }
+  .chip button:hover {
+    color: #b00020;
+  }
+  .clear-all {
+    font-size: 0.85rem;
+    padding: 0.2rem 0.5rem;
   }
   .error {
     color: #b00020;

@@ -124,6 +124,14 @@ the real `Annotated[..., Body()]` objects at decoration time.
   `queries.TRACE_ORDER_BY`, and a module-level assert keeps the two in sync.
   `lib/sort.ts`'s `sortRows` is now the metrics catalogue's only (it fits in
   one response); the traces page uses `nextSort` for header state alone.
+- `page_data.TraceFilters` is the filter surface both trace views share
+  (`service`, `path`, `route`, `method`, `status`, `min_duration_ms`);
+  `queries._where()` turns one into SQL for the trace list, the root facet
+  and the HTTP endpoint summary alike, so `/-/otel/http` can drill through to
+  `/-/otel/traces` by handing over its own querystring. Percentiles in
+  `http_endpoints` need two window definitions -- `count(*)` over an ordered
+  window is a running count, which silently collapses every percentile onto
+  the minimum.
 - The traces list's `?root=` filter buckets traces by root span --
   `queries.root_kinds` derives the buckets from the store (HTTP roots
   collapsed, everything else by span name and instrumentation scope), so

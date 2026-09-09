@@ -4,14 +4,20 @@ embedded page data and the API return identical shapes."""
 from __future__ import annotations
 
 import json
+import re
 
 from . import metrics_math, store
 from .page_data import (
+    ENDPOINT_LIMIT,
     POINT_LIMIT,
     ROOT_HTTP,
     ROOT_NONE,
+    ROUTE_NONE,
     SPAN_LIMIT,
     TRACE_SORT_COLUMNS,
+    EndpointRow,
+    EndpointsQuery,
+    EndpointsResponse,
     MetricsListQuery,
     MetricsQuery,
     MetricsQueryResponse,
@@ -76,43 +82,187 @@ def _order_clause(query: TracesQuery) -> str:
 # http_label: the two must agree or a row would land in a bucket whose label
 # it does not wear.
 _ROOT_URL_PATH = "json_extract(r.attributes, '$.\"url.path\"')"
+_ROOT_METHOD = "json_extract(r.attributes, '$.\"http.request.method\"')"
 
-# traces joined to their root span. Both the page query and the root-kind
-# facet read from this, so a trace is classified the same way it is listed.
+# traces joined to their root span. The trace list, the root-kind facet and
+# the HTTP endpoint summary all read from this, so a trace is filtered and
+# classified the same way whichever page asked.
 _MATCHING_SQL = f"""
   select t.trace_id, t.name, t.service_name, t.span_count, t.error_count,
-         t.duration_ms, t.start_ns, t.http_status, t.status,
+         t.duration_ms, t.start_ns, t.http_status, t.status, t.http_route,
          r.scope_name as root_scope,
          {_ROOT_URL_PATH} as url_path,
-         json_extract(r.attributes, '$."http.request.method"') as http_method
+         {_ROOT_METHOD} as http_method
   from traces t
   left join spans r on r.span_id = t.root_span_id
   {{where}}
 """
 
 
-def _where(query: TracesQuery, *, root: bool = True) -> tuple[str, list]:
-    """``(where clause, params)`` for a TracesQuery. ``root=False`` drops the
-    root-kind filter, which is what the facet counts need: a facet shows the
-    buckets you could switch to, not just the one you are in."""
+def _like_param(value: str) -> str:
+    "``%value%`` with LIKE's own wildcards escaped, for use with ESCAPE '\\'."
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _where(filters, *, root: str | None = None, http_only: bool = False):
+    """``(where clause, params)`` for a TraceFilters (or anything extending
+    it). ``root`` is passed separately rather than read off the model because
+    the root facet counts the buckets *without* the root filter applied, and
+    the endpoint summary has no root filter at all -- it passes
+    ``http_only``, which is the same restriction by another name."""
     clauses: list[str] = []
     params: list = []
-    if query.service:
+    if filters.service:
         clauses.append("t.service_name = ?")
-        params.append(query.service)
-    if root and query.root:
-        if query.root == ROOT_HTTP:
+        params.append(filters.service)
+    if http_only:
+        clauses.append(f"{_ROOT_URL_PATH} is not null")
+    if root:
+        if root == ROOT_HTTP:
             clauses.append(f"{_ROOT_URL_PATH} is not null")
-        elif query.root == ROOT_NONE:
+        elif root == ROOT_NONE:
             clauses.append("t.name is null")
         else:
             # A named root is non-HTTP by construction: an HTTP root's name is
             # its route pattern, and those live in the ROOT_HTTP bucket.
             clauses.append(f"t.name = ? and {_ROOT_URL_PATH} is null")
-            params.append(query.root)
+            params.append(root)
+    if filters.path:
+        clauses.append(f"{_ROOT_URL_PATH} like ? escape '\\'")
+        params.append(_like_param(filters.path))
+    if filters.route:
+        if filters.route == ROUTE_NONE:
+            clauses.append(f"t.http_route is null and {_ROOT_URL_PATH} is not null")
+        else:
+            clauses.append("t.http_route = ?")
+            params.append(filters.route)
+    if filters.method:
+        clauses.append(f"{_ROOT_METHOD} = ?")
+        params.append(filters.method)
+    if filters.status:
+        low, high = filters.status_range
+        clauses.append("t.http_status >= ? and t.http_status < ?")
+        params += [low, high]
+    if filters.min_duration_ms is not None:
+        clauses.append("t.duration_ms >= ?")
+        params.append(filters.min_duration_ms)
     if not clauses:
         return "", params
     return "where " + " and ".join(clauses), params
+
+
+# Datasette names its routes with regexes: `/(?P<database>[^\/\.]+)/...`.
+# Named groups are the readable part, so keep those and drop the rest.
+_ROUTE_GROUP = re.compile(r"\(\?P<(\w+)>[^)]*\)")
+_OPTIONAL_GROUP = re.compile(r"\(([^()]*)\)\?")
+
+
+def pretty_route(route: str | None) -> str:
+    """A route pattern as something you would recognise in a URL bar:
+    ``/(?P<database>[^\\/\\.]+)/(?P<table>[^\\/\\.]+)(\\.(?P<format>\\w+))?$``
+    reads as ``/{database}/{table}[.{format}]``. Display only -- the raw
+    pattern stays on the row as the drill-through key and the tooltip."""
+    if not route:
+        return "(no route)"
+    text = _ROUTE_GROUP.sub(r"{\1}", route)
+    for old, new in (("\\/", "/"), ("\\.", "."), ("^", ""), ("$", "")):
+        text = text.replace(old, new)
+    # What is left of an optional group -- almost always the trailing
+    # ``(.{format})?`` -- reads better in brackets than in regex.
+    return _OPTIONAL_GROUP.sub(r"[\1]", text)
+
+
+async def http_endpoints(datasette, query: EndpointsQuery) -> EndpointsResponse:
+    """The HTTP endpoint summary behind ``/-/otel/http``: one row per
+    (method, matched route), commonest first.
+
+    Percentiles are nearest-rank, read straight off the stored durations with
+    a window function -- every request is in the store, so there is no reason
+    to estimate from buckets the way the metrics pages must. p50 is the
+    smallest duration whose rank reaches half the group; SQLite has no
+    percentile function, and ordering by duration makes that first qualifying
+    row the answer.
+    """
+    db = datasette.get_database(store.db_name(datasette))
+    where, params = _where(query, http_only=True)
+    matching = _MATCHING_SQL.format(where=where)
+    request_count = (
+        await db.execute(f"select count(*) from ({matching})", params)
+    ).single_value()
+    result = await db.execute(
+        f"""
+        with http as ({matching}),
+        ranked as (
+          select http_method, http_route, duration_ms,
+                 row_number() over ranked_w as rn, count(*) over whole_w as n
+          from http where duration_ms is not null
+          -- Two windows on purpose: an ORDER BY window frames rows up to the
+          -- current one, so count(*) over the *ordered* window would be a
+          -- running count -- every row would look like the last one and every
+          -- percentile would collapse onto the minimum.
+          window ranked_w as (
+                   partition by http_method, http_route order by duration_ms
+                 ),
+                 whole_w as (partition by http_method, http_route)
+        ),
+        pct as (
+          select http_method, http_route,
+                 min(case when rn >= 0.5 * n then duration_ms end) as p50,
+                 min(case when rn >= 0.95 * n then duration_ms end) as p95
+          from ranked group by http_method, http_route
+        )
+        select h.http_method as method, h.http_route as route,
+               count(*) as request_count,
+               sum(case when h.http_status >= 500 or h.error_count > 0
+                        then 1 else 0 end) as error_count,
+               max(h.duration_ms) as max_ms, max(h.start_ns) as last_seen_ns,
+               max(p.p50) as p50_ms, max(p.p95) as p95_ms
+        from http h
+        left join pct p
+          on p.http_method is h.http_method and p.http_route is h.http_route
+        group by h.http_method, h.http_route
+        order by request_count desc limit ?
+        """,
+        params + [ENDPOINT_LIMIT + 1],
+    )
+    rows = list(result.rows)
+    endpoints = [
+        EndpointRow(
+            method=r["method"],
+            route=r["route"],
+            label=" ".join(
+                part for part in (r["method"], pretty_route(r["route"])) if part
+            ),
+            request_count=r["request_count"],
+            error_count=r["error_count"] or 0,
+            p50_ms=r["p50_ms"],
+            p95_ms=r["p95_ms"],
+            max_ms=r["max_ms"],
+            last_seen_ns=r["last_seen_ns"],
+        )
+        for r in rows[:ENDPOINT_LIMIT]
+    ]
+    return EndpointsResponse(
+        endpoints=endpoints,
+        query=query,
+        methods=await http_methods(datasette, query),
+        services=await list_services(datasette),
+        request_count=request_count,
+        truncated=len(rows) > ENDPOINT_LIMIT,
+    )
+
+
+async def http_methods(datasette, query: EndpointsQuery) -> list[str]:
+    "Methods to offer in the filter: every one the *other* filters leave."
+    db = datasette.get_database(store.db_name(datasette))
+    where, params = _where(query.model_copy(update={"method": None}), http_only=True)
+    result = await db.execute(
+        f"select distinct http_method from ({_MATCHING_SQL.format(where=where)}) "
+        "where http_method is not null order by 1 limit 50",
+        params,
+    )
+    return [r["http_method"] for r in result.rows]
 
 
 async def root_kinds(datasette, query: TracesQuery) -> list[TraceRootKind]:
@@ -121,7 +271,7 @@ async def root_kinds(datasette, query: TracesQuery) -> list[TraceRootKind]:
     the scope that emitted the root span (so a plugin's roots sit together),
     commonest first within a scope."""
     db = datasette.get_database(store.db_name(datasette))
-    where, params = _where(query, root=False)
+    where, params = _where(query)
     result = await db.execute(
         f"""
         select case when url_path is not null then '{ROOT_HTTP}'
@@ -165,7 +315,7 @@ async def list_traces(datasette, query: TracesQuery) -> TracesListResponse:
     is not worth that.
     """
     db = datasette.get_database(store.db_name(datasette))
-    where, params = _where(query)
+    where, params = _where(query, root=query.root)
     # root_span_id is a primary-key probe into spans: display-time lookup of
     # the two url fields rather than promoting them into the traces table
     # keeps the v1 schema contract untouched.
@@ -213,6 +363,7 @@ async def list_traces(datasette, query: TracesQuery) -> TracesListResponse:
         next=str(query.offset + query.size) if has_more else None,
         total=total,
         root_kinds=await root_kinds(datasette, query),
+        route_label=pretty_route(query.route) if query.route else None,
     )
 
 
@@ -234,6 +385,11 @@ async def store_summary(datasette) -> dict:
             "select "
             "(select count(*) from traces) as trace_count, "
             "(select count(*) from spans) as span_count, "
+            # The same test /-/otel/http counts by, so the landing card and
+            # that page never disagree.
+            "(select count(*) from traces t left join spans r "
+            "  on r.span_id = t.root_span_id "
+            f" where {_ROOT_URL_PATH} is not null) as http_request_count, "
             "(select count(*) from metrics) as metric_count, "
             "(select count(*) from metric_points) as metric_point_count"
         )

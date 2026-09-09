@@ -12,6 +12,8 @@ from datasette_plugin_router import Body
 
 from .. import queries
 from ..page_data import (
+    EndpointsQuery,
+    EndpointsResponse,
     MetricsListQuery,
     MetricsListResponse,
     MetricsQuery,
@@ -37,6 +39,15 @@ async def api_trace_detail(datasette, request, trace_id: str):
     if detail is None:
         return Response.json({"error": "trace not found"}, status=404)
     return Response.json(detail.model_dump())
+
+
+@router.POST(r"^/-/otel/api/http/endpoints$", output=EndpointsResponse)
+@check_viewer()
+async def api_http_endpoints(
+    datasette, request, body: Annotated[EndpointsQuery, Body()]
+):
+    summary = await queries.http_endpoints(datasette, body)
+    return Response.json(summary.model_dump())
 
 
 @router.POST(r"^/-/otel/api/metrics/list$", output=MetricsListResponse)

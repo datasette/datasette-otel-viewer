@@ -198,10 +198,8 @@ async def test_page_url_carries_the_query(make_ds):
         (await ds.client.get("/-/otel/traces?_sort=duration_ms&_size=4")).text
     )
     assert [t["duration_ms"] for t in data["traces"]] == [1.0, 2.0, 3.0, 4.0]
-    assert data["query"] == {
+    assert {k: data["query"][k] for k in ("size", "sort", "sort_desc", "next")} == {
         "size": 4,
-        "service": None,
-        "root": None,
         "sort": "duration_ms",
         "sort_desc": None,
         "next": None,

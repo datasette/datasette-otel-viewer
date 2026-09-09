@@ -30,6 +30,14 @@
         <dd>{fmt.format(data.span_count)}</dd>
       </dl>
     </a>
+    <a class="card" href="/-/otel/http">
+      <h2>HTTP endpoints &rarr;</h2>
+      <p>Requests grouped by the route they matched: rate, errors, latency.</p>
+      <dl>
+        <dt>Requests</dt>
+        <dd>{fmt.format(data.http_request_count)}</dd>
+      </dl>
+    </a>
     <a class="card" href="/-/otel/metrics">
       <h2>Metrics &rarr;</h2>
       <p>Counters, gauges and histograms charted over time.</p>

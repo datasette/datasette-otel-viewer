@@ -12,6 +12,7 @@ Two type pipelines read these (see CLAUDE.md "Type safety"):
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
@@ -65,6 +66,98 @@ class TraceRow(BaseModel):
     status: str | None = None
 
 
+# Endpoints are one row per (method, matched route); a Datasette instance has
+# a few dozen routes, so this cap is a guard, not a paging scheme.
+ENDPOINT_LIMIT = 200
+
+# ``TraceFilters.status``: an exact code ("404") or a class ("4xx").
+STATUS_PATTERN = re.compile(r"^(?:[1-5][0-9][0-9]|[1-5]xx)$")
+
+# Reserved ``TraceFilters.route`` value for HTTP requests that matched no
+# route. Datasette's route patterns are regexes anchored on "/" or "^", so
+# none of them can be the literal string "none".
+ROUTE_NONE = "none"
+
+
+class TraceFilters(BaseModel):
+    """What both trace views can narrow by. The HTTP fields are shared on
+    purpose: ``/-/otel/http`` drills through to ``/-/otel/traces`` carrying
+    the filters the summary was showing, so the two must read the same
+    fields under the same querystring names."""
+
+    service: str | None = None
+    # Substring of the root span's url.path -- "endpoint contains".
+    path: str | None = None
+    # Exact ``traces.http_route`` (the matched route pattern), or ROUTE_NONE
+    # for HTTP requests that matched none. This is what an endpoint row on
+    # /-/otel/http links through as.
+    route: str | None = None
+    method: str | None = None
+    # "500" or "5xx".
+    status: str | None = None
+    min_duration_ms: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _check_status(self):
+        if self.status is not None and not STATUS_PATTERN.match(self.status):
+            raise ValueError(
+                f'status must be a code ("500") or a class ("5xx"), not {self.status!r}'
+            )
+        return self
+
+    @property
+    def status_range(self) -> tuple[int, int]:
+        "``[low, high)`` for the status filter: 500 -> (500, 501), 5xx -> (500, 600)."
+        if self.status.endswith("xx"):
+            low = int(self.status[0]) * 100
+            return low, low + 100
+        code = int(self.status)
+        return code, code + 1
+
+
+class EndpointRow(BaseModel):
+    """One HTTP endpoint on ``/-/otel/http``: a method and the route pattern
+    it matched, with the stats of the requests behind it. Percentiles are
+    nearest-rank over the matching requests -- exact, since they are computed
+    from the stored durations rather than from a histogram."""
+
+    method: str | None = None
+    # The raw route pattern (a regex); None when the request matched no route.
+    route: str | None = None
+    # "<method> <readable route>", e.g. "GET /{database}/{table}".
+    label: str
+    request_count: int
+    # Requests that failed: a 5xx response, or any errored span in the trace.
+    error_count: int
+    p50_ms: float | None = None
+    p95_ms: float | None = None
+    max_ms: float | None = None
+    last_seen_ns: int | None = None
+
+
+class EndpointsQuery(TraceFilters):
+    "Body of ``POST /-/otel/api/http/endpoints``."
+
+
+class EndpointsResponse(BaseModel):
+    endpoints: list[EndpointRow]
+    query: EndpointsQuery
+    # Every method seen under the current filters *except* the method one --
+    # facet counts show the options you could switch to.
+    methods: list[str] = []
+    services: list[str] = []
+    # Matching requests, across every endpoint (not just the listed ones).
+    request_count: int
+    # True when more endpoints matched than ENDPOINT_LIMIT.
+    truncated: bool = False
+
+
+class HttpSummaryPageData(EndpointsResponse):
+    "Embedded by ``GET /-/otel/http``."
+
+    database: str
+
+
 # Reserved ``TracesQuery.root`` values: every other value is a root span
 # name. A plugin would have to name a *non-HTTP* root span literally "http"
 # or "none" to collide.
@@ -89,7 +182,7 @@ class TraceRootKind(BaseModel):
     count: int
 
 
-class TracesQuery(BaseModel):
+class TracesQuery(TraceFilters):
     """Body of ``POST /-/otel/api/traces/list``: filter, sort, one page.
 
     Deliberately Datasette's own vocabulary -- ``sort``/``sort_desc``/``size``
@@ -100,7 +193,6 @@ class TracesQuery(BaseModel):
     over the page: "slowest traces" means slowest of all of them."""
 
     size: int = Field(default=DEFAULT_SIZE, ge=1, le=MAX_SIZE)
-    service: str | None = None
     # A TraceRootKind key: "http" for anything with a url.path, "none" for a
     # trace whose root span isn't in the store, else a root span name.
     root: str | None = None
@@ -148,6 +240,9 @@ class TracesListResponse(BaseModel):
     # The root-filter buckets, counted under the current *service* filter but
     # not the current root one -- a facet shows you the alternatives.
     root_kinds: list[TraceRootKind] = []
+    # queries.pretty_route() of an active ``route`` filter: the list shows the
+    # filter it arrived with, and route patterns are regexes.
+    route_label: str | None = None
 
 
 class TracesListPageData(TracesListResponse):
@@ -291,6 +386,8 @@ class OtelIndexPageData(BaseModel):
 
     trace_count: int
     span_count: int
+    # Traces whose root span is an HTTP request: what /-/otel/http summarises.
+    http_request_count: int
     metric_count: int
     metric_point_count: int
     services: list[str]
@@ -319,6 +416,7 @@ class MetricDetailPageData(BaseModel):
 __exports__ = [
     OtelIndexPageData,
     TracesListPageData,
+    HttpSummaryPageData,
     TraceDetailPageData,
     MetricsListPageData,
     MetricDetailPageData,

@@ -8,6 +8,8 @@ from pydantic import ValidationError
 from .. import queries, store
 from ..page_data import (
     DEFAULT_SIZE,
+    EndpointsQuery,
+    HttpSummaryPageData,
     MetricDetailPageData,
     MetricsListPageData,
     MetricsListQuery,
@@ -51,14 +53,30 @@ async def index_page(datasette, request):
     )
 
 
+def _http_filters(request) -> dict:
+    """The filter querystring both trace views share: ``?service=&path=&
+    route=&method=&status=&min_duration_ms=``. Plain names, not Datasette's
+    underscored ones -- these are this plugin's own filters, while ``_sort``
+    and friends deliberately mirror a table page."""
+    args = request.args
+    return {
+        "service": args.get("service") or None,
+        "path": args.get("path") or None,
+        "route": args.get("route") or None,
+        "method": args.get("method") or None,
+        "status": args.get("status") or None,
+        "min_duration_ms": args.get("min_duration_ms") or None,
+    }
+
+
 def _traces_query(request) -> TracesQuery:
     """``?_sort_desc=duration_ms&_size=50&_next=50`` -> the TracesQuery the
     JSON API takes. Datasette's own underscore-prefixed names, on purpose:
     the list page's URL *is* its state, and it reads like a table page's."""
     args = request.args
     return TracesQuery(
+        **_http_filters(request),
         size=args.get("_size") or DEFAULT_SIZE,
-        service=args.get("service") or None,
         root=args.get("root") or None,
         sort=args.get("_sort") or None,
         sort_desc=args.get("_sort_desc") or None,
@@ -101,6 +119,27 @@ async def trace_detail_page(datasette, request, trace_id: str):
         request,
         title=detail.title,
         entrypoint="src/pages/trace_detail/index.ts",
+        page_data=page_data,
+    )
+
+
+@router.GET(r"^/-/otel/http$")
+@check_viewer()
+async def http_summary_page(datasette, request):
+    try:
+        query = EndpointsQuery(**_http_filters(request))
+    except ValidationError as error:
+        return Response.text(f"Bad endpoint query: {error}", status=400)
+    summary = await queries.http_endpoints(datasette, query)
+    page_data = HttpSummaryPageData(
+        **summary.model_dump(),
+        database=store.db_name(datasette),
+    )
+    return await _render(
+        datasette,
+        request,
+        title="HTTP endpoints",
+        entrypoint="src/pages/http_summary/index.ts",
         page_data=page_data,
     )
 
