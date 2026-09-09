@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import {
     formatAbsoluteTimePrecise,
     formatDurationNs,
@@ -59,10 +60,15 @@
     const spanId = match[1]!;
     if (!nodesById.has(spanId)) return;
     // Expand every collapsed ancestor so the deep-linked row is visible.
+    // `collapsed` is read untracked, and only rewritten when an ancestor is
+    // actually collapsed: this runs inside an $effect, and a plain read +
+    // reassign made that effect invalidate itself every run
+    // (effect_update_depth_exceeded, on any nested #span- deep link).
     const ancestors = ancestorsById.get(spanId) ?? [];
-    if (ancestors.length > 0) {
-      const next = new Set(collapsed);
-      for (const id of ancestors) next.delete(id);
+    const hidden = untrack(() => ancestors.filter((id) => collapsed.has(id)));
+    if (hidden.length > 0) {
+      const next = new Set(untrack(() => collapsed));
+      for (const id of hidden) next.delete(id);
       collapsed = next;
     }
     selectedSpanId = spanId;
@@ -73,8 +79,12 @@
     });
   }
 
+  // Runs once (selectFromHash tracks nothing), then on every hash change --
+  // back/forward through deep links, or a hash typed by hand.
   $effect(() => {
     selectFromHash();
+    window.addEventListener("hashchange", selectFromHash);
+    return () => window.removeEventListener("hashchange", selectFromHash);
   });
 
   let copied = $state(false);
