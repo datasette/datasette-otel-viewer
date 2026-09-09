@@ -201,6 +201,7 @@ async def test_page_url_carries_the_query(make_ds):
     assert data["query"] == {
         "size": 4,
         "service": None,
+        "root": None,
         "sort": "duration_ms",
         "sort_desc": None,
         "next": None,
@@ -220,6 +221,62 @@ async def test_page_url_carries_the_query(make_ds):
     bad = await ds.client.get("/-/otel/traces?_sort=nope")
     assert bad.status_code == 400
     assert "cannot sort traces by nope" in bad.text
+
+
+@pytest.mark.asyncio
+async def test_root_kinds_bucket_traces_by_what_started_them(make_ds):
+    """The root filter: HTTP traces in one bucket, every other root under its
+    own span name, tagged with the scope that emitted it -- which is how a
+    plugin's roots (datasette_cron.run and friends) stay separate from
+    Datasette's own without this plugin knowing they exist."""
+    ds = await make_ds(public_viewer=True)
+    await ds.client.get("/-/versions.json")
+    await drain()
+
+    async def listed(**body):
+        response = await ds.client.post("/-/otel/api/traces/list", json=body)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    kinds = {k["key"]: k for k in (await listed())["root_kinds"]}
+    # Real Datasette startup and request spans, no seeding: one HTTP bucket
+    # (route names are per-endpoint, so they collapse) and datasette.startup
+    # under Datasette's own instrumentation scope.
+    assert kinds["http"]["label"] == "HTTP requests"
+    assert kinds["http"]["scope"] is None
+    assert kinds["datasette.startup"] == {
+        "key": "datasette.startup",
+        "label": "datasette.startup",
+        "scope": "datasette",
+        "count": 1,
+    }
+
+    http = await listed(root="http")
+    assert http["total"] == kinds["http"]["count"]
+    assert all(t["label"].startswith("GET /") for t in http["traces"])
+
+    startup = await listed(root="datasette.startup")
+    assert [t["label"] for t in startup["traces"]] == ["datasette.startup"]
+    assert startup["total"] == 1
+    # A facet counts the buckets you could switch to, so it ignores the root
+    # filter currently applied (but not the service one).
+    assert {k["key"] for k in startup["root_kinds"]} == set(kinds)
+    assert {k["key"] for k in (await listed(service="nope"))["root_kinds"]} == set()
+
+    # An unknown bucket is empty rather than an error: the keys are data, not
+    # an allowlist, and the store is a ring buffer.
+    assert (await listed(root="datasette_cron.run"))["traces"] == []
+
+
+@pytest.mark.asyncio
+async def test_root_filter_from_the_page_url(make_ds):
+    ds = await make_ds(public_viewer=True)
+    await ds.client.get("/-/versions.json")
+    await drain()
+    data = page_data((await ds.client.get("/-/otel/traces?root=http")).text)
+    assert data["query"]["root"] == "http"
+    assert all(t["label"].startswith("GET /") for t in data["traces"])
+    assert "datasette.startup" not in [t["label"] for t in data["traces"]]
 
 
 @pytest.mark.asyncio

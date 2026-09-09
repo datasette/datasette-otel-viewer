@@ -59,6 +59,7 @@ def _traces_query(request) -> TracesQuery:
     return TracesQuery(
         size=args.get("_size") or DEFAULT_SIZE,
         service=args.get("service") or None,
+        root=args.get("root") or None,
         sort=args.get("_sort") or None,
         sort_desc=args.get("_sort_desc") or None,
         next=args.get("_next") or None,

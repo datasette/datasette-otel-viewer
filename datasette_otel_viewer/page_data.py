@@ -65,6 +65,30 @@ class TraceRow(BaseModel):
     status: str | None = None
 
 
+# Reserved ``TracesQuery.root`` values: every other value is a root span
+# name. A plugin would have to name a *non-HTTP* root span literally "http"
+# or "none" to collide.
+ROOT_HTTP = "http"
+ROOT_NONE = "none"
+
+
+class TraceRootKind(BaseModel):
+    """One bucket of the "what started this trace" filter.
+
+    HTTP roots collapse into a single bucket -- their span names are the
+    matched route, one per endpoint -- while every other root is its own
+    span name, grouped by the instrumentation scope that created it. That
+    grouping is what separates a plugin's roots (``datasette_cron.run``,
+    scope ``datasette_cron``) from Datasette's own (``datasette.startup``,
+    scope ``datasette``) without this plugin knowing either of them."""
+
+    key: str  # ROOT_HTTP, ROOT_NONE, or the root span's name
+    label: str
+    # Instrumentation scope of the root span: the library that emitted it.
+    scope: str | None = None
+    count: int
+
+
 class TracesQuery(BaseModel):
     """Body of ``POST /-/otel/api/traces/list``: filter, sort, one page.
 
@@ -77,6 +101,9 @@ class TracesQuery(BaseModel):
 
     size: int = Field(default=DEFAULT_SIZE, ge=1, le=MAX_SIZE)
     service: str | None = None
+    # A TraceRootKind key: "http" for anything with a url.path, "none" for a
+    # trace whose root span isn't in the store, else a root span name.
+    root: str | None = None
     # At most one of these, and only a TRACE_SORT_COLUMNS name.
     sort: str | None = None
     sort_desc: str | None = None
@@ -118,6 +145,9 @@ class TracesListResponse(BaseModel):
     query: TracesQuery
     next: str | None = None
     total: int
+    # The root-filter buckets, counted under the current *service* filter but
+    # not the current root one -- a facet shows you the alternatives.
+    root_kinds: list[TraceRootKind] = []
 
 
 class TracesListPageData(TracesListResponse):

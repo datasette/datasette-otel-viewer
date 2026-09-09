@@ -139,13 +139,37 @@ The pages are Svelte 5 + TypeScript, built with Vite and served through
 borrows Datasette's querystring vocabulary for the rest:
 `?_sort=`/`?_sort_desc=` (a column of the list: `label`, `service_name`,
 `http_status`, `span_count`, `error_count`, `duration_ms`, `start_ns`,
-`status`), `?_size=` and `?_next=` for paging, `?service=` to filter. Sorting
+`status`), `?_size=` and `?_next=` for paging, `?service=` and `?root=` to
+filter. Sorting
 and paging happen in SQL over the whole store, so "slowest first" means the
 slowest trace recorded, not the slowest one on screen — and the URL is the
 state, so a sorted, filtered list is a link you can send to someone. An
 unknown sort column is a 400, like Datasette's own.
 
 Gated exactly like the pages (`datasette-otel-viewer`, or `public_viewer: true`).
+
+#### Filtering by what started the trace
+
+`?root=` (the **Root** dropdown) buckets traces by their root span. HTTP
+traces collapse into one bucket — `?root=http` — because their span names are
+the matched route, one per endpoint. Every other root is its own bucket, keyed
+by span name and grouped in the dropdown by the *instrumentation scope* that
+emitted it, so Datasette's own roots (`datasette.startup`, and the
+`db.query`/`db.write.queue_wait` roots a `block=False` write leaves behind)
+sit under `datasette` while a plugin's sit under its own:
+
+```
+All roots
+  HTTP requests (1204)
+  [datasette]        datasette.startup (2)   db.query (17)
+  [datasette_cron]   datasette_cron.tick (60)   datasette_cron.run (12)
+```
+
+The buckets are discovered from the store rather than listed in this plugin,
+so a plugin that starts emitting its own root spans shows up without a
+release here. Counts follow the service filter but not the root one — a facet
+shows the buckets you could switch to. Traces whose root span isn't in the
+store (a remote `traceparent` parent, or a pruned root) bucket as `?root=none`.
 
 ### Metrics pages
 

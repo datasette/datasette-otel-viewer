@@ -8,6 +8,8 @@ import json
 from . import metrics_math, store
 from .page_data import (
     POINT_LIMIT,
+    ROOT_HTTP,
+    ROOT_NONE,
     SPAN_LIMIT,
     TRACE_SORT_COLUMNS,
     MetricsListQuery,
@@ -18,6 +20,7 @@ from .page_data import (
     SeriesPoint,
     SpanRow,
     TraceDetail,
+    TraceRootKind,
     TraceRow,
     TracesListResponse,
     TracesQuery,
@@ -69,6 +72,84 @@ def _order_clause(query: TracesQuery) -> str:
     return clause + ", trace_id"
 
 
+# `url.path` on the root span is what makes a trace an HTTP one, here and in
+# http_label: the two must agree or a row would land in a bucket whose label
+# it does not wear.
+_ROOT_URL_PATH = "json_extract(r.attributes, '$.\"url.path\"')"
+
+# traces joined to their root span. Both the page query and the root-kind
+# facet read from this, so a trace is classified the same way it is listed.
+_MATCHING_SQL = f"""
+  select t.trace_id, t.name, t.service_name, t.span_count, t.error_count,
+         t.duration_ms, t.start_ns, t.http_status, t.status,
+         r.scope_name as root_scope,
+         {_ROOT_URL_PATH} as url_path,
+         json_extract(r.attributes, '$."http.request.method"') as http_method
+  from traces t
+  left join spans r on r.span_id = t.root_span_id
+  {{where}}
+"""
+
+
+def _where(query: TracesQuery, *, root: bool = True) -> tuple[str, list]:
+    """``(where clause, params)`` for a TracesQuery. ``root=False`` drops the
+    root-kind filter, which is what the facet counts need: a facet shows the
+    buckets you could switch to, not just the one you are in."""
+    clauses: list[str] = []
+    params: list = []
+    if query.service:
+        clauses.append("t.service_name = ?")
+        params.append(query.service)
+    if root and query.root:
+        if query.root == ROOT_HTTP:
+            clauses.append(f"{_ROOT_URL_PATH} is not null")
+        elif query.root == ROOT_NONE:
+            clauses.append("t.name is null")
+        else:
+            # A named root is non-HTTP by construction: an HTTP root's name is
+            # its route pattern, and those live in the ROOT_HTTP bucket.
+            clauses.append(f"t.name = ? and {_ROOT_URL_PATH} is null")
+            params.append(query.root)
+    if not clauses:
+        return "", params
+    return "where " + " and ".join(clauses), params
+
+
+async def root_kinds(datasette, query: TracesQuery) -> list[TraceRootKind]:
+    """The root-filter buckets present in the store: one for HTTP traces,
+    one per distinct non-HTTP root span name. HTTP first, then grouped by
+    the scope that emitted the root span (so a plugin's roots sit together),
+    commonest first within a scope."""
+    db = datasette.get_database(store.db_name(datasette))
+    where, params = _where(query, root=False)
+    result = await db.execute(
+        f"""
+        select case when url_path is not null then '{ROOT_HTTP}'
+                    when name is null then '{ROOT_NONE}'
+                    else name end as key,
+               root_scope, count(*) as count
+        from ({_MATCHING_SQL.format(where=where)})
+        group by key, root_scope
+        order by count desc limit 200
+        """,
+        params,
+    )
+    kinds = [
+        TraceRootKind(
+            key=r["key"],
+            label={ROOT_HTTP: "HTTP requests", ROOT_NONE: "(no root span)"}.get(
+                r["key"], r["key"]
+            ),
+            # The HTTP bucket spans every scope that serves requests; naming
+            # one of them would be a lie.
+            scope=None if r["key"] == ROOT_HTTP else r["root_scope"],
+            count=r["count"],
+        )
+        for r in result.rows
+    ]
+    return sorted(kinds, key=lambda k: (k.key != ROOT_HTTP, k.scope or "", -k.count))
+
+
 async def list_traces(datasette, query: TracesQuery) -> TracesListResponse:
     """One page of the traces list: **one row per trace**, summarised by its
     root span.
@@ -84,30 +165,17 @@ async def list_traces(datasette, query: TracesQuery) -> TracesListResponse:
     is not worth that.
     """
     db = datasette.get_database(store.db_name(datasette))
-    where = ""
-    params: list = []
-    if query.service:
-        where = "where t.service_name = ?"
-        params.append(query.service)
-    total = (
-        await db.execute(f"select count(*) from traces t {where}", params)
-    ).single_value()
+    where, params = _where(query)
     # root_span_id is a primary-key probe into spans: display-time lookup of
     # the two url fields rather than promoting them into the traces table
     # keeps the v1 schema contract untouched.
+    matching = _MATCHING_SQL.format(where=where)
+    total = (
+        await db.execute(f"select count(*) from ({matching})", params)
+    ).single_value()
     result = await db.execute(
         f"""
-        with matching as (
-          select t.trace_id, t.name, t.service_name, t.span_count,
-                 t.error_count, t.duration_ms, t.start_ns, t.http_status,
-                 t.status,
-                 json_extract(r.attributes, '$."url.path"') as url_path,
-                 json_extract(r.attributes, '$."http.request.method"')
-                   as http_method
-          from traces t
-          left join spans r on r.span_id = t.root_span_id
-          {where}
-        )
+        with matching as ({matching})
         select * from matching
         order by {_order_clause(query)} limit ? offset ?
         """,
@@ -144,6 +212,7 @@ async def list_traces(datasette, query: TracesQuery) -> TracesListResponse:
         query=query,
         next=str(query.offset + query.size) if has_more else None,
         total=total,
+        root_kinds=await root_kinds(datasette, query),
     )
 
 

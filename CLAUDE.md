@@ -124,6 +124,12 @@ the real `Annotated[..., Body()]` objects at decoration time.
   `queries.TRACE_ORDER_BY`, and a module-level assert keeps the two in sync.
   `lib/sort.ts`'s `sortRows` is now the metrics catalogue's only (it fits in
   one response); the traces page uses `nextSort` for header state alone.
+- The traces list's `?root=` filter buckets traces by root span --
+  `queries.root_kinds` derives the buckets from the store (HTTP roots
+  collapsed, everything else by span name and instrumentation scope), so
+  nothing here enumerates Datasette's or a plugin's span names. `_where()`
+  builds the filter for both the list and the facet; keep the HTTP test
+  (`url.path` on the root span) in step with `http_label`.
 - `metrics_math.py` and `frontend/src/lib/metricsMath.ts` must stay in sync;
   both test files assert the same vectors.
 - The metrics planning package (research, decision log, tickets) is in

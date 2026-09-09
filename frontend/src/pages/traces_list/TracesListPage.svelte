@@ -5,6 +5,7 @@
   import { formatAbsoluteTime, formatRelativeTime } from "../../lib/time.ts";
   import { loadPageData } from "../../page_data/load.ts";
   import type {
+    TraceRootKind,
     TraceRow,
     TracesListPageData,
     TracesQuery,
@@ -18,6 +19,9 @@
   const client = makeClient();
 
   const SIZE_PRESETS = [25, 50, 100, 250, 500];
+  // page_data.DEFAULT_SORT_DESC: the server resolves an unsorted query to
+  // this, so spelling it in the URL would be noise.
+  const DEFAULT_SORT_DESC = "start_ns";
   // Descending first for these when a new column is clicked: slowest,
   // biggest, newest is what you want from a metrics column.
   const NUMERIC_COLUMNS = new Set([
@@ -32,6 +36,7 @@
   let query = $state<TracesQuery>({ ...initial.query });
   let total = $state<number>(initial.total);
   let nextCursor = $state<string | null>(initial.next ?? null);
+  let rootKinds = $state<TraceRootKind[]>(initial.root_kinds ?? []);
   let loading = $state(false);
   let error = $state<string | null>(null);
 
@@ -57,6 +62,30 @@
     offset - size > 0 ? String(offset - size) : null,
   );
 
+  // Root-filter options. The server counts the buckets that exist right now;
+  // a bucket named in the URL that has since aged out of the ring buffer is
+  // kept as a zero option so the select still shows what is being filtered.
+  const rootOptions = $derived(
+    query.root && !rootKinds.some((k) => k.key === query.root)
+      ? [
+          { key: query.root, label: query.root, scope: null, count: 0 },
+          ...rootKinds,
+        ]
+      : rootKinds,
+  );
+  // Scope-less buckets (HTTP requests) lead; the rest group under the
+  // instrumentation scope that emitted the root span, which is what puts a
+  // plugin's roots together under its own name.
+  const ungroupedRoots = $derived(rootOptions.filter((k) => !k.scope));
+  const scopedRoots = $derived(
+    [...new Set(rootOptions.map((k) => k.scope).filter(Boolean))].map(
+      (scope) => ({
+        scope: scope as string,
+        kinds: rootOptions.filter((k) => k.scope === scope),
+      }),
+    ),
+  );
+
   // Service choices: the server's distinct list, plus anything only seen in
   // the loaded rows (a brand-new service arriving between requests).
   const services = $derived(
@@ -75,8 +104,10 @@
   function syncUrl() {
     const params = new URLSearchParams();
     if (query.service) params.set("service", query.service);
+    if (query.root) params.set("root", query.root);
     if (query.sort) params.set("_sort", query.sort);
-    else if (query.sort_desc) params.set("_sort_desc", query.sort_desc);
+    else if (query.sort_desc && query.sort_desc !== DEFAULT_SORT_DESC)
+      params.set("_sort_desc", query.sort_desc);
     if (size !== 100) params.set("_size", String(size));
     if (query.next) params.set("_next", query.next);
     const search = params.toString();
@@ -96,6 +127,7 @@
       traces = data.traces;
       total = data.total;
       nextCursor = data.next ?? null;
+      rootKinds = data.root_kinds ?? [];
       // The server normalises the query (an explicit default sort); take its
       // word for it so the headers and the URL agree with the rows.
       query = { ...data.query };
@@ -151,6 +183,26 @@
   </p>
 
   <div class="controls">
+    <label>
+      Root
+      <select
+        value={query.root ?? ""}
+        onchange={(e) => update({ root: e.currentTarget.value || null })}
+      >
+        <option value="">All roots</option>
+        {#each ungroupedRoots as kind (kind.key)}
+          <option value={kind.key}>{kind.label} ({kind.count})</option>
+        {/each}
+        {#each scopedRoots as group (group.scope)}
+          <optgroup label={group.scope}>
+            {#each group.kinds as kind (kind.key)}
+              <option value={kind.key}>{kind.label} ({kind.count})</option>
+            {/each}
+          </optgroup>
+        {/each}
+      </select>
+    </label>
+
     <label>
       Service
       <select
@@ -263,8 +315,8 @@
       {:else}
         <tr>
           <td colspan="7" class="empty">
-            {query.service
-              ? `No traces from ${query.service} yet.`
+            {query.root || query.service
+              ? "No traces match this filter."
               : "No traces yet — make a request, then refresh."}
           </td>
         </tr>
