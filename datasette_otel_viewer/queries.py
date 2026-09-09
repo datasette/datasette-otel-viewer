@@ -20,6 +20,7 @@ from .page_data import (
     ROUTE_NONE,
     SPAN_GROUP_LIMIT,
     SPAN_LIMIT,
+    SPAN_SORT_COLUMNS,
     SQL_QUERY_LIMIT,
     SQL_TEXT_LIMIT,
     TRACE_SORT_COLUMNS,
@@ -34,6 +35,9 @@ from .page_data import (
     SeriesPoint,
     SpanFilters,
     SpanGroupRow,
+    SpanListQuery,
+    SpanListResponse,
+    SpanListRow,
     SpanRow,
     SpansQuery,
     SpansResponse,
@@ -812,6 +816,107 @@ async def span_groups(datasette, query: SpansQuery) -> SpansResponse:
         span_count=totals["span_count"] or 0,
         total_ms=totals["total_ms"],
         truncated=len(rows) > SPAN_GROUP_LIMIT,
+    )
+
+
+# What each sortable span column means in SQL, over the _SPAN_GROUPS_SQL
+# select. Same contract as TRACE_ORDER_BY: the API validates against
+# SPAN_SORT_COLUMNS and this holds the SQL behind each name.
+SPAN_ORDER_BY = {
+    "name": "name",
+    "scope": "scope_name",
+    "duration_ms": "duration_ms",
+    "start_ns": "start_ns",
+    "status": "status",
+}
+assert set(SPAN_ORDER_BY) == set(SPAN_SORT_COLUMNS)
+
+
+def _span_order_clause(query: SpanListQuery) -> str:
+    "``order by`` for one SpanListQuery, nulls last and always a total order."
+    column = query.sort or query.sort_desc
+    direction = "asc" if query.sort else "desc"
+    clause = f"{SPAN_ORDER_BY[column]} {direction} nulls last"
+    if column != "start_ns":
+        clause += ", start_ns desc"
+    return clause + ", span_id"
+
+
+def _span_list_where(query: SpanListQuery) -> tuple[str, list]:
+    """The catalogue's own filters plus the exact keys that pin one of its
+    rows: a drill-through shows the spans that row counted, no more."""
+    where, params = _span_where(query)
+    clauses = [where[len("where ") :]] if where else []
+    if query.name_exact:
+        clauses.append("s.name = ?")
+        params.append(query.name_exact)
+    if query.statement:
+        # The SQL page's rows are keyed on the text, or on the callback name
+        # when there is no text (see sql_queries).
+        clauses.append(f"coalesce(s.db_query_text, {_SPAN_CALLBACK}) = ?")
+        params.append(query.statement)
+    if query.split_by and query.split_value is not None:
+        clauses.append("json_extract(s.attributes, '$.\"' || ?1 || '\"') = ?")
+        params.append(query.split_value)
+    if not clauses:
+        return "", params
+    return "where " + " and ".join(clauses), params
+
+
+async def span_list(datasette, query: SpanListQuery) -> SpanListResponse:
+    """The spans behind one catalogue row, newest-slowest first.
+
+    Paged like the trace list (offset behind an opaque cursor) rather than
+    capped: a busy `db.query` row can be thousands of spans, and the point of
+    opening it is to look through them.
+    """
+    db = datasette.get_database(store.db_name(datasette))
+    where, params = _span_list_where(query)
+    source = _SPAN_GROUPS_SQL.format(where=where)
+    params = [query.split_by] + params
+    total = (
+        await db.execute(f"select count(*) from ({source})", params)
+    ).single_value()
+    result = await db.execute(
+        f"""
+        with matching as ({source})
+        select m.*, t.name as trace_root_name
+        from matching m
+        left join traces t on t.trace_id = m.trace_id
+        order by {_span_order_clause(query)} limit ? offset ?
+        """,
+        # One row past the page, as in list_traces: its presence is the
+        # "is there a next page?" test.
+        params + [query.size + 1, query.offset],
+    )
+    rows = list(result.rows)
+    spans = [
+        SpanListRow(
+            span_id=r["span_id"],
+            trace_id=r["trace_id"],
+            name=r["name"],
+            scope=r["scope_name"],
+            kind=r["kind"],
+            parent_span_id=r["parent_span_id"],
+            start_ns=r["start_ns"],
+            duration_ms=r["duration_ms"],
+            status=r["status"],
+            status_description=None,
+            split_value=(None if r["split_value"] is None else str(r["split_value"])),
+            # The trace's root span name, readable: for an HTTP root that is a
+            # route pattern, and a regex is not a useful label.
+            trace_label=(
+                pretty_route(r["trace_root_name"]) if r["trace_root_name"] else None
+            ),
+        )
+        for r in rows[: query.size]
+    ]
+    has_more = len(rows) > query.size
+    return SpanListResponse(
+        spans=spans,
+        query=query,
+        next=str(query.offset + query.size) if has_more else None,
+        total=total,
     )
 
 

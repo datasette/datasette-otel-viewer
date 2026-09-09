@@ -130,9 +130,22 @@
     return `/-/otel/traces/${row.slowest_trace_id}#span-${row.slowest_span_id}`;
   }
 
+  /** Opening a row shows the runs behind it: same drill-through as the span
+   * catalogue, keyed on the statement (or callback) rather than a span name. */
+  function listUrl(row: SqlQueryRow): string {
+    const params = new URLSearchParams({
+      name_exact: "db.query",
+      statement: row.query,
+    });
+    if (query.service) params.set("service", query.service);
+    if (query.min_duration_ms != null) {
+      params.set("min_duration_ms", String(query.min_duration_ms));
+    }
+    return `/-/otel/spans/list?${params}`;
+  }
+
   function open(row: SqlQueryRow) {
-    const url = slowestUrl(row);
-    if (url) window.location.href = url;
+    window.location.href = listUrl(row);
   }
 
   const fmt = new Intl.NumberFormat();
@@ -325,8 +338,10 @@
             {:else if row.operation}
               <span class="tag">{row.operation}</span>
             {/if}
-            <code title={row.query}
-              >{row.query}{row.text_truncated ? "…" : ""}</code
+            <a href={listUrl(row)} onclick={(e) => e.stopPropagation()}
+              ><code title={row.query}
+                >{row.query}{row.text_truncated ? "…" : ""}</code
+              ></a
             >
           </td>
           <td>{row.database ?? "—"}</td>

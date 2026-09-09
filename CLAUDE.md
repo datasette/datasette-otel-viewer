@@ -45,7 +45,7 @@ datasette_otel_viewer/
 ├── router.py                # Shared Router + check_viewer() decorator
 ├── page_data.py             # Pydantic models: page data + API request/response
 ├── queries.py               # Read-side SQL shared by pages and API
-├── routes/pages.py          # GET /-/otel (index), /traces, /traces/{trace_id}, /http, /sql, /spans, /metrics, /metrics/{name} (HTML)
+├── routes/pages.py          # GET /-/otel (index), /traces, /traces/{trace_id}, /http, /sql, /spans, /spans/list, /metrics, /metrics/{name} (HTML)
 ├── routes/api.py            # POST .../traces/list, http/endpoints, sql/queries, spans/groups, metrics/*; GET .../traces/{trace_id}
 ├── selfsource.py            # TracerProvider ownership + suppression sampler
 ├── selfmetrics.py           # MeterProvider ownership/attach + SDK metrics → rows
@@ -61,6 +61,7 @@ frontend/src/
 ├── pages/http_summary/      # /-/otel/http endpoints (HttpSummaryPage.svelte)
 ├── pages/sql_summary/       # /-/otel/sql statements (SqlSummaryPage.svelte)
 ├── pages/spans_summary/     # /-/otel/spans catalogue (SpansSummaryPage.svelte)
+├── pages/spans_list/        # /-/otel/spans/list drill-through (SpansListPage.svelte)
 ├── pages/metrics_list/      # Metrics table
 ├── pages/metric_detail/     # SveltePlot charts (SeriesChart, HistogramHeatmap, PercentileChart)
 ├── lib/traceTree.ts         # Span forest assembly (unit-tested), time.ts, sort.ts
@@ -147,7 +148,9 @@ the real `Annotated[..., Body()]` objects at decoration time.
   span, keyed on name + `scope_name` (the plugin that emitted it), with
   `split_by` breaking a row down by an attribute -- that key reaches a JSON
   path, so it is bound as `?1` *and* pattern-checked in
-  `page_data.SpanFilters`.
+  `page_data.SpanFilters`. A summary row is a *group*, so opening one drills
+  into `span_list()` (the spans behind it, paged like the trace list), never
+  into a single span -- the slowest-span jump stays on the Max cell.
 - The traces list's `?root=` filter buckets traces by root span --
   `queries.root_kinds` derives the buckets from the store (HTTP roots
   collapsed, everything else by span name and instrumentation scope), so

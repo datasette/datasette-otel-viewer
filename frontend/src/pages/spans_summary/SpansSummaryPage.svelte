@@ -123,15 +123,36 @@
     });
   }
 
-  /** Straight to the slowest span of this kind, in its own waterfall. */
+  /** Straight to the slowest span of this kind, in its own waterfall. Kept
+   * on the Max cell, where the number it belongs to is. */
   function slowestUrl(row: SpanGroupRow): string | null {
     if (!row.slowest_trace_id || !row.slowest_span_id) return null;
     return `/-/otel/traces/${row.slowest_trace_id}#span-${row.slowest_span_id}`;
   }
 
+  /** Opening a row shows the spans it counted -- the row is a group, so the
+   * drill-through is a list, carrying this row's identity plus whatever is
+   * currently narrowing the catalogue. */
+  function listUrl(row: SpanGroupRow): string {
+    const params = new URLSearchParams({ name_exact: row.name });
+    if (row.scope) params.set("scope", row.scope);
+    if (query.split_by) {
+      params.set("split_by", query.split_by);
+      if (row.split_value !== null && row.split_value !== undefined) {
+        params.set("split_value", row.split_value);
+      }
+    }
+    if (query.kind) params.set("kind", query.kind);
+    if (query.nesting) params.set("nesting", query.nesting);
+    if (query.service) params.set("service", query.service);
+    if (query.min_duration_ms != null) {
+      params.set("min_duration_ms", String(query.min_duration_ms));
+    }
+    return `/-/otel/spans/list?${params}`;
+  }
+
   function open(row: SpanGroupRow) {
-    const url = slowestUrl(row);
-    if (url) window.location.href = url;
+    window.location.href = listUrl(row);
   }
 
   /** db.query spans have a page of their own, broken down by statement
@@ -345,7 +366,9 @@
             {#if row.kind && row.kind !== "INTERNAL"}
               <span class="tag">{row.kind}</span>
             {/if}
-            <code title={row.name}>{row.name}</code>
+            <a href={listUrl(row)} onclick={(e) => e.stopPropagation()}
+              ><code title={row.name}>{row.name}</code></a
+            >
             {#if sqlUrl(row)}
               <a
                 class="dim by-statement"

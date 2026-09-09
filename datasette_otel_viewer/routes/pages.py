@@ -14,6 +14,8 @@ from ..page_data import (
     MetricsListPageData,
     MetricsListQuery,
     OtelIndexPageData,
+    SpanListQuery,
+    SpansListPageData,
     SpansPageData,
     SpansQuery,
     SqlQueriesQuery,
@@ -252,6 +254,43 @@ async def spans_summary_page(datasette, request):
         entrypoint="src/pages/spans_summary/index.ts",
         page_data=page_data,
         crumbs=_crumbs(datasette, section="spans"),
+    )
+
+
+@router.GET(r"^/-/otel/spans/list$")
+@check_viewer()
+async def spans_list_page(datasette, request):
+    args = request.args
+    try:
+        query = SpanListQuery(
+            **_span_filters(request),
+            name_exact=args.get("name_exact") or None,
+            split_value=args.get("split_value"),
+            statement=args.get("statement") or None,
+            size=args.get("_size") or DEFAULT_SIZE,
+            sort=args.get("_sort") or None,
+            sort_desc=args.get("_sort_desc") or None,
+            next=args.get("_next") or None,
+        )
+    except ValidationError as error:
+        return Response.text(f"Bad span filter: {error}", status=400)
+    listed = await queries.span_list(datasette, query)
+    page_data = SpansListPageData(
+        **listed.model_dump(),
+        database=store.db_name(datasette),
+    )
+    return await _render(
+        datasette,
+        request,
+        title=query.name_exact or query.statement or "Spans",
+        entrypoint="src/pages/spans_list/index.ts",
+        page_data=page_data,
+        crumbs=_crumbs(
+            datasette,
+            section="spans",
+            page=query.name_exact or query.statement or "Spans",
+            page_href="/-/otel/spans/list",
+        ),
     )
 
 

@@ -18,6 +18,8 @@ from ..page_data import (
     MetricsListResponse,
     MetricsQuery,
     MetricsQueryResponse,
+    SpanListQuery,
+    SpanListResponse,
     SpansQuery,
     SpansResponse,
     SqlQueriesQuery,
@@ -66,6 +68,13 @@ async def api_sql_queries(datasette, request, body: Annotated[SqlQueriesQuery, B
 async def api_span_groups(datasette, request, body: Annotated[SpansQuery, Body()]):
     summary = await queries.span_groups(datasette, body)
     return Response.json(summary.model_dump())
+
+
+@router.POST(r"^/-/otel/api/spans/list$", output=SpanListResponse)
+@check_viewer()
+async def api_span_list(datasette, request, body: Annotated[SpanListQuery, Body()]):
+    listed = await queries.span_list(datasette, body)
+    return Response.json(listed.model_dump())
 
 
 @router.POST(r"^/-/otel/api/metrics/list$", output=MetricsListResponse)

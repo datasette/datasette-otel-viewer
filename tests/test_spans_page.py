@@ -24,8 +24,14 @@ def span_row(
     duration_ms=1.0,
     status="UNSET",
     attributes=None,
+    sql=None,
 ):
     start = START_NS + i * 1_000_000_000
+    attributes = dict(attributes or {})
+    if sql:
+        # selfsource.span_to_row promotes the text into its own column *and*
+        # leaves it in the attributes; the statement filter reads the column.
+        attributes["db.query.text"] = sql
     return {
         "trace_id": trace or f"{i:032x}",
         "span_id": f"{i:016x}",
@@ -37,7 +43,8 @@ def span_row(
         "duration_ms": duration_ms,
         "status": status,
         "service_name": "datasette",
-        "attributes": json.dumps(attributes or {}),
+        "db_query_text": sql,
+        "attributes": json.dumps(attributes),
         "resource": json.dumps({"service.name": "datasette"}),
         "scope_name": scope,
     }
@@ -193,4 +200,136 @@ async def test_page_renders_and_is_gated(make_ds):
     assert (await private.client.get("/-/otel/spans")).status_code == 403
     assert (
         await private.client.post("/-/otel/api/spans/groups", json={})
+    ).status_code == 403
+
+
+async def listed_spans(ds, **body):
+    response = await ds.client.post("/-/otel/api/spans/list", json=body)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+@pytest.mark.asyncio
+async def test_a_catalogue_row_opens_the_spans_behind_it(make_ds):
+    """Opening a row on /-/otel/spans is a drill-through to its members, not
+    a jump into one of them: the row is a group, so the answer is a list."""
+    ds = await make_ds(public_viewer=True)
+    trace = f"{9:032x}"
+    await store.insert_spans(
+        ds,
+        [
+            span_row(9, name="GET /{database}", kind="SERVER", trace=trace),
+            *[
+                span_row(
+                    20 + n,
+                    name="db.query",
+                    kind="CLIENT",
+                    trace=trace,
+                    parent=f"{9:016x}",
+                    duration_ms=1.0 + n,
+                )
+                for n in range(5)
+            ],
+            *cron_trace(3, task="backup", duration_ms=40.0),
+        ],
+    )
+    listed = await listed_spans(ds, name_exact="db.query")
+    assert listed["total"] == 5
+    # Slowest first by default -- you opened the row to see the time.
+    assert [s["duration_ms"] for s in listed["spans"]] == [5.0, 4.0, 3.0, 2.0, 1.0]
+    assert listed["query"]["sort_desc"] == "duration_ms"
+    row = listed["spans"][0]
+    assert row["trace_id"] == trace
+    # Each row says what it sits inside, for a nested span that is the point.
+    assert row["trace_label"] == "GET /{database}"
+    assert row["parent_span_id"] == f"{9:016x}"
+
+    # The row's identity, not just its name: scope pins it to one plugin.
+    cron = await listed_spans(
+        ds, name_exact="datasette_cron.run", scope="datasette_cron"
+    )
+    assert cron["total"] == 1
+    assert cron["spans"][0]["scope"] == "datasette_cron"
+    assert cron["spans"][0]["parent_span_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_span_list_pages_and_sorts_in_sql(make_ds):
+    ds = await make_ds(public_viewer=True)
+    await store.insert_spans(
+        ds,
+        [
+            span_row(n, name="db.query", kind="CLIENT", duration_ms=float(n))
+            for n in range(1, 13)
+        ],
+    )
+    first = await listed_spans(ds, name_exact="db.query", size=5)
+    assert first["total"] == 12
+    assert [s["duration_ms"] for s in first["spans"]] == [12.0, 11.0, 10.0, 9.0, 8.0]
+
+    second = await listed_spans(ds, name_exact="db.query", size=5, next=first["next"])
+    assert [s["duration_ms"] for s in second["spans"]] == [7.0, 6.0, 5.0, 4.0, 3.0]
+    last = await listed_spans(ds, name_exact="db.query", size=5, next=second["next"])
+    assert last["next"] is None
+
+    oldest = await listed_spans(ds, name_exact="db.query", size=3, sort="start_ns")
+    assert [s["duration_ms"] for s in oldest["spans"]] == [1.0, 2.0, 3.0]
+
+    bad = await ds.client.post("/-/otel/api/spans/list", json={"sort": "attributes"})
+    assert bad.status_code == 400
+    assert "cannot sort spans by attributes" in bad.json()["error"]
+
+
+@pytest.mark.asyncio
+async def test_split_value_and_statement_pin_a_row(make_ds):
+    """The two other ways a row is identified: a split_by value (the span
+    catalogue) and an exact statement (the SQL page, whose rows are keyed on
+    query text rather than span name)."""
+    ds = await make_ds(public_viewer=True)
+    sql = "select count(*) from [plants]"
+    await store.insert_spans(
+        ds,
+        [
+            *cron_trace(3, task="backup", duration_ms=40.0),
+            *cron_trace(4, task="cleanup", duration_ms=10.0),
+            span_row(30, name="db.query", kind="CLIENT", duration_ms=2.0, sql=sql),
+            span_row(
+                31, name="db.query", kind="CLIENT", duration_ms=3.0, sql="select 1"
+            ),
+        ],
+    )
+    split = await listed_spans(
+        ds,
+        name_exact="datasette_cron.run",
+        split_by="datasette_cron.task",
+        split_value="backup",
+    )
+    assert split["total"] == 1
+    assert split["spans"][0]["split_value"] == "backup"
+
+    statement = await listed_spans(ds, name_exact="db.query", statement=sql)
+    assert statement["total"] == 1
+    assert statement["spans"][0]["duration_ms"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_span_list_page_renders_and_is_gated(make_ds):
+    ds = await make_ds(public_viewer=True)
+    await store.insert_spans(ds, cron_trace(3, task="backup", duration_ms=5.0))
+    response = await ds.client.get(
+        "/-/otel/spans/list?name_exact=datasette_cron.run&scope=datasette_cron"
+    )
+    assert response.status_code == 200
+    assert "src/pages/spans_list/index.ts" in response.text
+    data = page_data(response.text)
+    assert data["total"] == 1
+    assert data["query"]["name_exact"] == "datasette_cron.run"
+    assert data["database"] == "otel"
+    # The page names the row it opened, in the title and the crumbs.
+    assert "<title>datasette_cron.run</title>" in response.text
+
+    private = await make_ds()
+    assert (await private.client.get("/-/otel/spans/list")).status_code == 403
+    assert (
+        await private.client.post("/-/otel/api/spans/list", json={})
     ).status_code == 403

@@ -366,6 +366,88 @@ class SpansPageData(SpansResponse):
     database: str
 
 
+# Sortable columns for the span list, same allowlist shape as the trace list.
+SPAN_SORT_COLUMNS = ("name", "scope", "duration_ms", "start_ns", "status")
+DEFAULT_SPAN_SORT_DESC = "duration_ms"
+
+
+class SpanListQuery(SpanFilters):
+    """Body of ``POST /-/otel/api/spans/list``: the individual spans behind
+    one row of the catalogue.
+
+    It extends the catalogue's own filters so a row can drill in by handing
+    over its querystring, plus the three exact keys that identify a row --
+    ``name_exact``, ``scope`` (inherited) and ``split_value`` -- and
+    ``statement`` for the SQL page, whose rows are keyed on the query text
+    rather than the span name. Sorted slowest-first: you opened a row to see
+    what the time went on."""
+
+    name_exact: str | None = None
+    # The split_by attribute's value for the row drilled into. Needs
+    # ``split_by`` set to mean anything.
+    split_value: str | None = None
+    # Exact db.query.text (or datasette.callback), for /-/otel/sql's rows.
+    statement: str | None = None
+
+    size: int = Field(default=DEFAULT_SIZE, ge=1, le=MAX_SIZE)
+    sort: str | None = None
+    sort_desc: str | None = None
+    next: str | None = None
+
+    @model_validator(mode="after")
+    def _check_span_sort(self):
+        if self.sort and self.sort_desc:
+            raise ValueError("cannot use sort and sort_desc at the same time")
+        for value in (self.sort, self.sort_desc):
+            if value is not None and value not in SPAN_SORT_COLUMNS:
+                raise ValueError(
+                    "cannot sort spans by {} (sortable: {})".format(
+                        value, ", ".join(SPAN_SORT_COLUMNS)
+                    )
+                )
+        if not self.sort and not self.sort_desc:
+            self.sort_desc = DEFAULT_SPAN_SORT_DESC
+        if self.next is not None and not self.next.isdigit():
+            raise ValueError("next must be a cursor from a previous response")
+        return self
+
+    @property
+    def offset(self) -> int:
+        return int(self.next or 0)
+
+
+class SpanListRow(BaseModel):
+    "One span, as the list shows it."
+
+    span_id: str
+    trace_id: str
+    name: str
+    scope: str | None = None
+    kind: str | None = None
+    parent_span_id: str | None = None
+    start_ns: int | None = None
+    duration_ms: float | None = None
+    status: str | None = None
+    status_description: str | None = None
+    # The split_by attribute's value, when splitting.
+    split_value: str | None = None
+    # What the span sits inside: its trace's root span, readably.
+    trace_label: str | None = None
+
+
+class SpanListResponse(BaseModel):
+    spans: list[SpanListRow]
+    query: SpanListQuery
+    next: str | None = None
+    total: int
+
+
+class SpansListPageData(SpanListResponse):
+    "Embedded by ``GET /-/otel/spans/list``."
+
+    database: str
+
+
 # Reserved ``TracesQuery.root`` values: every other value is a root span
 # name. A plugin would have to name a *non-HTTP* root span literally "http"
 # or "none" to collide.
@@ -627,6 +709,7 @@ __exports__ = [
     HttpSummaryPageData,
     SqlSummaryPageData,
     SpansPageData,
+    SpansListPageData,
     TraceDetailPageData,
     MetricsListPageData,
     MetricDetailPageData,

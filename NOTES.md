@@ -213,9 +213,19 @@ an attribute key, which turns one row into one per value of it. That is what
 makes a plugin's spans explorable from here: `datasette_cron.run` split by
 `datasette_cron.task` is one row per task, with its own percentiles.
 
+Opening a row lists **the spans behind it** at `/-/otel/spans/list` — a row
+is a group, so the drill-through is the group's members, slowest first, paged
+and sorted in SQL like the trace list (`?_sort`/`?_sort_desc`/`?_size`/
+`?_next`). It carries the row's identity (`?name_exact=`, `?scope=`,
+`?split_value=`) plus whatever was narrowing the catalogue, shown as chips
+you can drop one at a time; each span links into its own waterfall, and says
+which trace it sits inside. The Max cell on the catalogue still jumps
+straight to the slowest single span.
+
 The other summary pages are this one zoomed in on a particular kind of work:
 `/-/otel/http` on the request roots, `/-/otel/sql` on the `db.query` spans
-broken down by statement rather than by name.
+broken down by statement rather than by name — and a row there opens the same
+span list, keyed on `?statement=`.
 
 #### SQL queries
 
