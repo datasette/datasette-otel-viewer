@@ -330,6 +330,7 @@
   <table>
     <thead>
       <tr>
+        <th>Trace</th>
         <SortHeader key="label" label="Root span" {sort} onsort={handleSort} />
         <SortHeader
           key="service_name"
@@ -360,12 +361,18 @@
           onsort={handleSort}
         />
         <SortHeader key="start_ns" label="Started" {sort} onsort={handleSort} />
-        <th>Trace</th>
       </tr>
     </thead>
     <tbody>
       {#each traces as trace (trace.trace_id)}
         <tr class="row-link" onclick={() => goToTrace(trace.trace_id)}>
+          <td class="mono trace-id">
+            <a
+              href={traceUrl(trace.trace_id)}
+              title={`Trace ${trace.trace_id}`}
+              onclick={(e) => e.stopPropagation()}>{shortId(trace.trace_id)}</a
+            >
+          </td>
           <td class="root">
             <a
               href={spanListUrl(trace)}
@@ -401,13 +408,6 @@
               : formatAbsoluteTime(trace.start_ns)}
           >
             {trace.start_ns == null ? "—" : formatRelativeTime(trace.start_ns)}
-          </td>
-          <td class="mono trace-id">
-            <a
-              href={traceUrl(trace.trace_id)}
-              title={`Trace ${trace.trace_id}`}
-              onclick={(e) => e.stopPropagation()}>{shortId(trace.trace_id)}</a
-            >
           </td>
         </tr>
       {:else}
