@@ -113,6 +113,14 @@
     return `/-/otel/spans/list?${params}`;
   }
 
+  /** An attribute key, cut into the pieces it may wrap between. The keys are
+   * dotted paths and the inspector column is narrow, so most of them wrap;
+   * offering the breaks after the separators splits `gen_ai.usage.` rather
+   * than mid-word, and keeps the key one copyable string. */
+  function keySegments(key: string): string[] {
+    return key.match(/[^._/-]*[._/-]*/g)?.filter(Boolean) ?? [key];
+  }
+
   function attributeEntries(obj: Record<string, unknown>): [string, string][] {
     return Object.entries(obj).map(([k, v]) => [
       k,
@@ -242,7 +250,10 @@
               <tbody>
                 {#each attributeEntries(s.attributes ?? {}) as [key, value] (key)}
                   <tr>
-                    <th>{key}</th>
+                    <th
+                      >{#each keySegments(key) as seg, i}{#if i > 0}<wbr
+                          />{/if}{seg}{/each}</th
+                    >
                     <td>
                       {#if key === "db.query.text"}
                         <pre class="query-text">{value}</pre>
@@ -269,7 +280,10 @@
               <tbody>
                 {#each attributeEntries(s.resource ?? {}) as [key, value] (key)}
                   <tr>
-                    <th>{key}</th>
+                    <th
+                      >{#each keySegments(key) as seg, i}{#if i > 0}<wbr
+                          />{/if}{seg}{/each}</th
+                    >
                     <td>{value}</td>
                   </tr>
                 {/each}
@@ -436,7 +450,11 @@
     vertical-align: top;
     padding: 0.2rem 0.4rem 0.2rem 0;
     width: 38%;
-    word-break: break-word;
+    /* Datasette core's app.css sets `th { white-space: nowrap }` on every
+       table. In this fixed-layout one that means a long key never wraps: it
+       runs straight over its own value. */
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   table.attrs td {
     padding: 0.2rem 0;
