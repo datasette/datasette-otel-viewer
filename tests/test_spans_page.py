@@ -417,3 +417,50 @@ async def test_a_store_too_slow_to_summarise_is_503_not_500(make_ds, monkeypatch
     # The JSON API is behind the same gate, so it answers the same way.
     api = await ds.client.post("/-/otel/api/spans/groups", json={})
     assert api.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_the_list_charts_every_matching_span(make_ds, monkeypatch):
+    """The table shows one page, sorted; the scatter above it is the whole
+    matching set, which is what makes a single span's duration mean anything.
+    So it answers the filters, not the page -- and it is capped, so a busy row
+    samples one span in n rather than shipping a quarter of a million dots."""
+    ds = await make_ds(public_viewer=True)
+    await store.insert_spans(
+        ds,
+        [
+            span_row(n, name="db.query", kind="CLIENT", duration_ms=float(n))
+            for n in range(1, 13)
+        ]
+        # Same store, different work: the chart must not draw these.
+        + [span_row(50, name="other.thing", duration_ms=99.0)],
+    )
+
+    listed = await listed_spans(ds, name_exact="db.query", size=5)
+    assert listed["chart_stride"] == 1
+    # Every matching span, whichever page you are on, oldest dot first.
+    assert len(listed["chart"]) == 12
+    assert [p["duration_ms"] for p in listed["chart"]] == [
+        float(n) for n in range(1, 13)
+    ]
+    assert listed["chart"][0]["start_ns"] < listed["chart"][-1]["start_ns"]
+    assert {p["span_id"] for p in listed["chart"]} == {
+        f"{n:016x}" for n in range(1, 13)
+    }
+
+    # A filter narrows the cloud too, or the dots would answer a question
+    # nobody asked.
+    filtered = await listed_spans(ds, name_exact="db.query", min_duration_ms=10)
+    assert [p["duration_ms"] for p in filtered["chart"]] == [10.0, 11.0, 12.0]
+
+    # Past the cap the chart samples: one span in `chart_stride`, spread over
+    # the range rather than the first slice of it.
+    monkeypatch.setattr(queries, "SPAN_CHART_POINTS", 4)
+    sampled = await listed_spans(ds, name_exact="db.query", highlight=f"{2:016x}")
+    assert sampled["chart_stride"] == 3
+    assert sampled["total"] == 12
+    # 4 sampled dots, plus the pinned span: it is why you came, so it is drawn
+    # whether or not the sample happened to catch it.
+    ids = [p["span_id"] for p in sampled["chart"]]
+    assert f"{2:016x}" in ids
+    assert len(ids) == 5

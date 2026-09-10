@@ -231,6 +231,16 @@ row, so it sits among its peers. Sorting keeps the pin in view; paging away
 from it, or dropping a filter it depended on, leaves the chip saying "not on
 this page", and the chip drops the pin.
 
+Above the table is the same set of spans as a **scatter**: start time across,
+duration up, one dot per span. The table can only ever show a page of a
+sorted list -- page one of "slowest first" is the least representative sample
+there is -- while the cloud is what says whether 21ms is the norm here, and
+whether a slow span is a spike at one moment or how this work always behaves.
+Errors are red, the pinned span is ringed, and a dot opens its span in its
+trace. A log axis is a checkbox away, since latency is usually heavy-tailed.
+Past 2000 matching spans the chart samples one span in n (and says so)
+instead of shipping every dot.
+
 The other summary pages are this one zoomed in on a particular kind of work:
 `/-/otel/http` on the request roots, `/-/otel/sql` on the `db.query` spans
 broken down by statement rather than by name — and a row there opens the same

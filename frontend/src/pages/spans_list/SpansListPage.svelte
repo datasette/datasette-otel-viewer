@@ -1,6 +1,7 @@
 <script lang="ts">
   import { makeClient } from "../../api.ts";
   import Breadcrumbs from "../../components/Breadcrumbs.svelte";
+  import DurationScatter from "./DurationScatter.svelte";
   import SortHeader from "../../components/SortHeader.svelte";
   import { nextSort, type SortState } from "../../lib/sort.ts";
   import {
@@ -10,6 +11,7 @@
   } from "../../lib/time.ts";
   import { loadPageData } from "../../page_data/load.ts";
   import type {
+    SpanChartPoint,
     SpanListQuery,
     SpanListRow,
     SpansListPageData,
@@ -30,6 +32,10 @@
   let spans = $state<SpanListRow[]>(initial.spans);
   let query = $state<SpanListQuery>({ ...initial.query });
   let total = $state<number>(initial.total);
+  // The scatter's dots: every matching span, sampled one in `chartStride`
+  // when there are more of them than the server will draw.
+  let chart = $state<SpanChartPoint[]>(initial.chart ?? []);
+  let chartStride = $state<number>(initial.chart_stride ?? 1);
   let nextCursor = $state<string | null>(initial.next ?? null);
   let loading = $state(false);
   let error = $state<string | null>(null);
@@ -143,6 +149,8 @@
     } else {
       spans = data.spans;
       total = data.total;
+      chart = data.chart ?? [];
+      chartStride = data.chart_stride ?? 1;
       nextCursor = data.next ?? null;
       query = { ...data.query };
       syncUrl();
@@ -204,6 +212,14 @@
         </span>
       {/each}
     </div>
+  {/if}
+
+  {#if chart.length}
+    <DurationScatter
+      points={chart}
+      highlight={query.highlight}
+      stride={chartStride}
+    />
   {/if}
 
   <div class="controls">

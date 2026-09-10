@@ -22,6 +22,11 @@ from .metrics_math import NS
 DEFAULT_SIZE = 100
 MAX_SIZE = 500
 SPAN_LIMIT = 5000
+# Dots on the span list's scatter. Every matching span is a point, so a busy
+# `db.query` row would be hundreds of thousands of them: past this many the
+# list samples one in n (SpanListResponse.chart_stride) instead, which is
+# plenty to read the shape of a latency cloud in a 200px-tall chart.
+SPAN_CHART_POINTS = 2000
 
 # Columns the traces list may be ordered by -- an allowlist, like Datasette's
 # own ?_sort/?_sort_desc: a request naming anything else is a 400 rather than
@@ -444,11 +449,29 @@ class SpanListRow(BaseModel):
     trace_label: str | None = None
 
 
+class SpanChartPoint(BaseModel):
+    "One dot above the list: when a span ran, and for how long."
+
+    span_id: str
+    trace_id: str
+    start_ns: int
+    duration_ms: float
+    status: str | None = None
+
+
 class SpanListResponse(BaseModel):
     spans: list[SpanListRow]
     query: SpanListQuery
     next: str | None = None
     total: int
+    # The scatter above the table, over *every* matching span rather than the
+    # page in front of you: one page sorted by duration is the least
+    # representative sample there is, and the question the page exists to
+    # answer ("is this one slow?") is about the whole cloud.
+    chart: list[SpanChartPoint] = []
+    # 1 when every matching span is a dot, n when one in n is -- the chart
+    # says so rather than quietly drawing a subset.
+    chart_stride: int = 1
 
 
 class SpansListPageData(SpanListResponse):

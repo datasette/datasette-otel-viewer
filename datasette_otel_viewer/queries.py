@@ -18,6 +18,7 @@ from .page_data import (
     ROOT_HTTP,
     ROOT_NONE,
     ROUTE_NONE,
+    SPAN_CHART_POINTS,
     SPAN_GROUP_LIMIT,
     SPAN_LIMIT,
     SPAN_SORT_COLUMNS,
@@ -33,6 +34,7 @@ from .page_data import (
     MetricSummaryRow,
     Series,
     SeriesPoint,
+    SpanChartPoint,
     SpanFilters,
     SpanGroupRow,
     SpanListQuery,
@@ -931,6 +933,45 @@ def _span_list_where(query: SpanListQuery) -> tuple[str, list]:
     return "where " + " and ".join(clauses), params
 
 
+async def _span_chart(
+    db, source: str, params: list, query: SpanListQuery, total: int
+) -> tuple[list[SpanChartPoint], int]:
+    """Every matching span as a (time, duration) dot, sampled to at most
+    SPAN_CHART_POINTS of them.
+
+    The sample is `rowid % stride`, not a window function or a limit: a limit
+    would draw the first slice of the time range and call it the whole cloud,
+    and a window means sorting every matching span a third time (the count and
+    the page already scan them once each). Rowid order is insertion order,
+    which is roughly start order -- the same assumption span_attribute_keys
+    samples on -- so every stretch of the range keeps its share of the dots.
+    The pinned span is drawn whether or not the sample caught it: it is the
+    reason for coming here.
+    """
+    stride = max(1, -(-total // SPAN_CHART_POINTS))
+    result = await db.execute(
+        f"""
+        select span_id, trace_id, start_ns, duration_ms, status
+        from ({source})
+        where start_ns is not null and duration_ms is not null
+          and (rowid % ? = 0 or span_id = ?)
+        order by start_ns
+        """,
+        params + [stride, query.highlight or ""],
+    )
+    points = [
+        SpanChartPoint(
+            span_id=r["span_id"],
+            trace_id=r["trace_id"],
+            start_ns=r["start_ns"],
+            duration_ms=r["duration_ms"],
+            status=r["status"],
+        )
+        for r in result.rows
+    ]
+    return points, stride
+
+
 async def span_list(datasette, query: SpanListQuery) -> SpanListResponse:
     """The spans behind one catalogue row, newest-slowest first.
 
@@ -1004,11 +1045,14 @@ async def span_list(datasette, query: SpanListQuery) -> SpanListResponse:
         for r in rows[: query.size]
     ]
     has_more = len(rows) > query.size
+    chart, stride = await _span_chart(db, source, params, query, total)
     return SpanListResponse(
         spans=spans,
         query=query,
         next=str(query.offset + query.size) if has_more else None,
         total=total,
+        chart=chart,
+        chart_stride=stride,
     )
 
 

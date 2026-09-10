@@ -181,6 +181,16 @@ the real `Annotated[..., Body()]` objects at decoration time.
   explicit `_next` wins, which is what stops paging away from the pinned page
   snapping back to it; SpansListPage marks the row and says so on the chip
   when the pin is not on the page in front of you.
+- The scatter above that list (`DurationScatter.svelte`, fed by
+  `SpanListResponse.chart`) is the *whole* matching set, not the page: the
+  page is a sorted slice, which is exactly the wrong sample to judge one
+  span's duration by. `queries._span_chart` samples it with `rowid % stride`
+  (`stride` from `total` and `page_data.SPAN_CHART_POINTS`) rather than a
+  `limit` -- which would draw the first slice of the time range as if it were
+  the whole cloud -- or a window, which would sort every matching span a third
+  time after the count and the page. Rowid order is insertion order, roughly
+  start order, the same assumption `span_attribute_keys` samples on. The
+  pinned span is unioned in so it is drawn even when the sample misses it.
 - The traces list's `?root=` filter buckets traces by root span --
   `queries.root_kinds` derives the buckets from the store (HTTP roots
   collapsed, everything else by span name and instrumentation scope), so
