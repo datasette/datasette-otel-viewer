@@ -7,8 +7,13 @@
   } from "../../lib/time.ts";
   import {
     ancestorIds,
+    buildRows,
     buildTraceTree,
     flattenTree,
+    GROUP_MAX_FRACTION,
+    GROUP_MIN_RUN,
+    ROOT_KEY,
+    selfTimeNs,
     traceBounds,
   } from "../../lib/traceTree.ts";
   import { loadPageData } from "../../page_data/load.ts";
@@ -29,8 +34,66 @@
   const minStartNs = bounds?.minStartNs ?? 0;
   const totalNs = bounds ? bounds.maxEndNs - bounds.minStartNs : 0;
 
+  /** Fold runs of consecutive same-name siblings into one row each (see
+   * `traceTree.groupSiblings`): a dozen sub-millisecond `db.query` rows
+   * between two five-second spans is the shape of every agent trace, and
+   * the long bars are what you came for. Off shows every span. */
+  let grouping = $state(true);
+  const rowModel = $derived(
+    buildRows(tree, {
+      minRun: grouping ? GROUP_MIN_RUN : Infinity,
+      maxDurationNs: totalNs * GROUP_MAX_FRACTION,
+    }),
+  );
+  const rootRows = $derived(rowModel.rowsByParent.get(ROOT_KEY) ?? []);
+  const groupIds = $derived(
+    Array.from(rowModel.rowsByParent.values())
+      .flat()
+      .filter((row) => row.kind === "group")
+      .map((row) => row.id),
+  );
+  const groupCount = $derived(groupIds.length);
+
   let collapsed = $state<Set<string>>(new Set());
+  /** Groups opened to show their members. Groups start closed: that is
+   * the whole point of them. */
+  let expandedGroups = $state<Set<string>>(new Set());
   let selectedSpanId = $state<string | null>(null);
+
+  /** The spans where the time went, for jumping straight to them without
+   * scrolling. Ranked by self time (`traceTree.selfTimeNs`), not
+   * duration: by duration the root and every wrapper around the slow
+   * call would fill the strip, each as long as the trace. */
+  const SLOWEST_COUNT = 5;
+  const slowest = Array.from(nodesById.values())
+    .map((node) => ({ span: node.span, selfNs: selfTimeNs(node) }))
+    .filter((entry) => entry.selfNs > 0)
+    .sort((a, b) => b.selfNs - a.selfNs)
+    .slice(0, SLOWEST_COUNT);
+
+  function toggleGroup(groupId: string) {
+    const next = new Set(expandedGroups);
+    if (next.has(groupId)) {
+      next.delete(groupId);
+    } else {
+      next.add(groupId);
+    }
+    expandedGroups = next;
+  }
+
+  function collapseAll() {
+    const next = new Set<string>();
+    for (const [id, node] of nodesById) {
+      if (node.children.length > 0) next.add(id);
+    }
+    collapsed = next;
+    expandedGroups = new Set();
+  }
+
+  function expandAll() {
+    collapsed = new Set();
+    expandedGroups = new Set(groupIds);
+  }
 
   const selectedNode = $derived(
     selectedSpanId ? (nodesById.get(selectedSpanId) ?? null) : null,
@@ -55,16 +118,13 @@
     selectedSpanId = null;
   }
 
-  function selectFromHash() {
-    const match = /^#span-(.+)$/.exec(window.location.hash);
-    if (!match) return;
-    const spanId = match[1]!;
-    if (!nodesById.has(spanId)) return;
-    // Expand every collapsed ancestor so the deep-linked row is visible.
-    // `collapsed` is read untracked, and only rewritten when an ancestor is
-    // actually collapsed: this runs inside an $effect, and a plain read +
-    // reassign made that effect invalidate itself every run
-    // (effect_update_depth_exceeded, on any nested #span- deep link).
+  /** Select a span and make sure its row is on screen: expand every
+   * collapsed ancestor, and open any group folding it or an ancestor
+   * away. State is read untracked, and only rewritten when something is
+   * actually hidden: `selectFromHash` runs inside an $effect, and a plain
+   * read + reassign made that effect invalidate itself every run
+   * (effect_update_depth_exceeded, on any nested #span- deep link). */
+  function reveal(spanId: string) {
     const ancestors = ancestorsById.get(spanId) ?? [];
     const hidden = untrack(() => ancestors.filter((id) => collapsed.has(id)));
     if (hidden.length > 0) {
@@ -72,12 +132,35 @@
       for (const id of hidden) next.delete(id);
       collapsed = next;
     }
+    const folded = untrack(() =>
+      [spanId, ...ancestors]
+        .map((id) => rowModel.groupOfSpan.get(id))
+        .filter((g): g is string => g !== undefined && !expandedGroups.has(g)),
+    );
+    if (folded.length > 0) {
+      const next = new Set(untrack(() => expandedGroups));
+      for (const id of folded) next.add(id);
+      expandedGroups = next;
+    }
     selectedSpanId = spanId;
     requestAnimationFrame(() => {
       document
         .getElementById(`span-${spanId}`)
         ?.scrollIntoView({ block: "center" });
     });
+  }
+
+  function jumpTo(spanId: string) {
+    history.replaceState(null, "", `#span-${spanId}`);
+    reveal(spanId);
+  }
+
+  function selectFromHash() {
+    const match = /^#span-(.+)$/.exec(window.location.hash);
+    if (!match) return;
+    const spanId = match[1]!;
+    if (!nodesById.has(spanId)) return;
+    reveal(spanId);
   }
 
   // Runs once (selectFromHash tracks nothing), then on every hash change --
@@ -175,17 +258,57 @@
   {#if spans.length === 0}
     <p class="empty">No spans found for this trace.</p>
   {:else}
+    <div class="toolbar">
+      {#if slowest.length > 1}
+        <div
+          class="slowest"
+          title="Spans ranked by self time: their duration minus the time spent in their children"
+        >
+          <span class="dim">Slowest:</span>
+          {#each slowest as { span: s, selfNs } (s.span_id)}
+            <button
+              type="button"
+              class="chip"
+              class:chip-selected={selectedSpanId === s.span_id}
+              title={`${s.name}: ${formatDurationNs(selfNs)} self time of ${formatDurationNs(s.end_ns - s.start_ns)}`}
+              onclick={() => jumpTo(s.span_id)}
+            >
+              <span class="chip-name">{s.name}</span>
+              <span class="chip-duration">{formatDurationNs(selfNs)}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+      <div class="tree-controls">
+        <label class="group-toggle">
+          <input type="checkbox" bind:checked={grouping} />
+          Group repeated spans{#if grouping && groupCount > 0}
+            <span class="dim"
+              >&nbsp;({groupCount} group{groupCount === 1 ? "" : "s"})</span
+            >{/if}
+        </label>
+        <button type="button" class="tree-btn" onclick={collapseAll}
+          >Collapse all</button
+        >
+        <button type="button" class="tree-btn" onclick={expandAll}
+          >Expand all</button
+        >
+      </div>
+    </div>
     <div class="body">
       <section class="waterfall">
-        {#each tree as node (node.span.span_id)}
+        {#each rootRows as row (row.kind === "group" ? row.id : row.node.span.span_id)}
           <WaterfallRow
-            {node}
+            {row}
             depth={0}
             {minStartNs}
             {totalNs}
             {collapsed}
+            {expandedGroups}
             {selectedSpanId}
+            rowsByParent={rowModel.rowsByParent}
             onToggle={toggle}
+            onToggleGroup={toggleGroup}
             onSelect={select}
           />
         {/each}
@@ -350,6 +473,81 @@
     color: #666;
     padding: 2rem 0;
     text-align: center;
+  }
+  .toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem 1.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.6rem;
+    font-size: 0.82rem;
+  }
+  .slowest {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.35rem;
+    max-width: 16rem;
+    padding: 0.15rem 0.5rem;
+    border: 1px solid #d7dee6;
+    border-radius: 1rem;
+    background: #f6f8fa;
+    font: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+  }
+  .chip:hover {
+    background: #eef2f6;
+  }
+  .chip-selected {
+    background: #eef4ff;
+    border-color: #a9c1f5;
+  }
+  .chip-name {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chip-duration {
+    flex-shrink: 0;
+    color: #555;
+    font-variant-numeric: tabular-nums;
+  }
+  .tree-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-shrink: 0;
+  }
+  .group-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .group-toggle input {
+    margin: 0;
+  }
+  .tree-btn {
+    font: inherit;
+    font-size: 0.78rem;
+    padding: 0.15rem 0.5rem;
+    border: 1px solid #d7dee6;
+    border-radius: 0.25rem;
+    background: #f6f8fa;
+    cursor: pointer;
+  }
+  .tree-btn:hover {
+    background: #eef2f6;
   }
   .body {
     display: flex;

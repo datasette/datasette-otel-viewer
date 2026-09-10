@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   ancestorIds,
+  buildRows,
   buildTraceTree,
   flattenTree,
+  groupSiblings,
+  ROOT_KEY,
+  selfTimeNs,
   traceBounds,
+  type Row,
+  type SpanNode,
 } from "./traceTree.ts";
 import type { SpanRow as Span } from "../page_data/TraceDetailPageData.types.ts";
 
@@ -212,5 +218,175 @@ describe("flattenTree / ancestorIds", () => {
     expect(map.get("root")).toEqual([]);
     expect(map.get("child")).toEqual(["root"]);
     expect(map.get("grandchild")).toEqual(["child", "root"]);
+  });
+});
+
+describe("selfTimeNs", () => {
+  it("subtracts the union of children, clipped to the span", () => {
+    const parent = makeSpan({ span_id: "p", start_ns: 0, end_ns: 100 });
+    const kids = [
+      makeSpan({ span_id: "a", parent_span_id: "p", start_ns: 10, end_ns: 30 }),
+      makeSpan({ span_id: "b", parent_span_id: "p", start_ns: 20, end_ns: 50 }),
+      makeSpan({ span_id: "c", parent_span_id: "p", start_ns: 60, end_ns: 70 }),
+      // Over-runs the parent: only the part inside it counts.
+      makeSpan({
+        span_id: "d",
+        parent_span_id: "p",
+        start_ns: 90,
+        end_ns: 120,
+      }),
+    ];
+    const [tree] = buildTraceTree([parent, ...kids]);
+    // Covered: [10,50] + [60,70] + [90,100] = 40 + 10 + 10.
+    expect(selfTimeNs(tree!)).toBe(40);
+  });
+
+  it("is the whole duration for a leaf", () => {
+    const [tree] = buildTraceTree([
+      makeSpan({ span_id: "leaf", start_ns: 5, end_ns: 25 }),
+    ]);
+    expect(selfTimeNs(tree!)).toBe(20);
+  });
+});
+
+describe("groupSiblings", () => {
+  /** A leaf node: `name` spans, each `durationNs` long, one after another
+   * from `startNs`. */
+  function leaves(
+    prefix: string,
+    count: number,
+    overrides: Partial<Span> = {},
+    startNs = 0,
+    durationNs = 100,
+  ): SpanNode[] {
+    return Array.from({ length: count }, (_, i) => ({
+      span: makeSpan({
+        span_id: `${prefix}-${i}`,
+        name: "db.query",
+        scope_name: "datasette",
+        start_ns: startNs + i * durationNs,
+        end_ns: startNs + (i + 1) * durationNs,
+        ...overrides,
+      }),
+      children: [],
+    }));
+  }
+  const opts = { minRun: 3, maxDurationNs: 1_000 };
+
+  function shape(rows: Row[]): string[] {
+    return rows.map((r) =>
+      r.kind === "group"
+        ? `${r.name}x${r.members.length}`
+        : r.node.span.span_id,
+    );
+  }
+
+  it("folds a run of at least minRun matching siblings into one group", () => {
+    const rows = groupSiblings(leaves("q", 5), opts);
+    expect(shape(rows)).toEqual(["db.queryx5"]);
+    const group = rows[0]!;
+    if (group.kind !== "group") throw new Error("expected a group");
+    expect(group.id).toBe("group-q-0");
+    expect(group.startNs).toBe(0);
+    expect(group.endNs).toBe(500);
+    expect(group.sumDurationNs).toBe(500);
+    expect(group.spanCount).toBe(5);
+    expect(group.scopeName).toBe("datasette");
+  });
+
+  it("leaves a run shorter than minRun as separate rows", () => {
+    expect(shape(groupSiblings(leaves("q", 2), opts))).toEqual(["q-0", "q-1"]);
+  });
+
+  it("only folds consecutive siblings, so order of work is preserved", () => {
+    const before = leaves("a", 3, {}, 0);
+    const llm = leaves("chat", 1, { name: "chat", scope_name: "llm" }, 300);
+    const after = leaves("b", 3, {}, 400);
+    const rows = groupSiblings([...before, ...llm, ...after], opts);
+    expect(shape(rows)).toEqual(["db.queryx3", "chat-0", "db.queryx3"]);
+  });
+
+  it("keys on name and scope together", () => {
+    const rows = groupSiblings(
+      [
+        ...leaves("a", 2, {}, 0),
+        ...leaves("b", 2, { scope_name: "other" }, 200),
+      ],
+      opts,
+    );
+    expect(shape(rows)).toEqual(["a-0", "a-1", "b-0", "b-1"]);
+  });
+
+  it("never groups an ERROR span or a span over the duration cap", () => {
+    const rows = groupSiblings(
+      [
+        ...leaves("a", 3, {}, 0),
+        ...leaves("err", 1, { status: "ERROR" }, 300),
+        ...leaves("b", 3, {}, 400),
+        ...leaves("slow", 1, {}, 700, 5_000),
+        ...leaves("c", 3, {}, 6_000),
+      ],
+      opts,
+    );
+    expect(shape(rows)).toEqual([
+      "db.queryx3",
+      "err-0",
+      "db.queryx3",
+      "slow-0",
+      "db.queryx3",
+    ]);
+  });
+
+  it("counts members' subtrees in spanCount", () => {
+    const members = leaves("q", 3);
+    members[0]!.children = leaves("exec", 2, { name: "db.query.execute" });
+    const rows = groupSiblings(members, opts);
+    expect(rows[0]!.kind).toBe("group");
+    expect((rows[0] as { spanCount: number }).spanCount).toBe(5);
+  });
+
+  it("minRun Infinity disables grouping", () => {
+    const rows = groupSiblings(leaves("q", 5), { ...opts, minRun: Infinity });
+    expect(rows.every((r) => r.kind === "span")).toBe(true);
+  });
+});
+
+describe("buildRows", () => {
+  it("groups at every level and indexes members by group", () => {
+    const root = makeSpan({ span_id: "root", start_ns: 0, end_ns: 10_000 });
+    const queries = Array.from({ length: 4 }, (_, i) =>
+      makeSpan({
+        span_id: `q-${i}`,
+        parent_span_id: "root",
+        name: "db.query",
+        start_ns: i * 100,
+        end_ns: i * 100 + 50,
+      }),
+    );
+    const execs = Array.from({ length: 3 }, (_, i) =>
+      makeSpan({
+        span_id: `e-${i}`,
+        parent_span_id: "q-0",
+        name: "db.query.execute",
+        start_ns: i * 10,
+        end_ns: i * 10 + 5,
+      }),
+    );
+    const tree = buildTraceTree([root, ...queries, ...execs]);
+
+    const model = buildRows(tree, { minRun: 3, maxDurationNs: 1_000 });
+
+    expect(model.rowsByParent.get(ROOT_KEY)!.map((r) => r.kind)).toEqual([
+      "span",
+    ]);
+    expect(model.rowsByParent.get("root")!.map((r) => r.kind)).toEqual([
+      "group",
+    ]);
+    expect(model.rowsByParent.get("q-0")!.map((r) => r.kind)).toEqual([
+      "group",
+    ]);
+    expect(model.groupOfSpan.get("q-2")).toBe("group-q-0");
+    expect(model.groupOfSpan.get("e-1")).toBe("group-e-0");
+    expect(model.groupOfSpan.has("root")).toBe(false);
   });
 });

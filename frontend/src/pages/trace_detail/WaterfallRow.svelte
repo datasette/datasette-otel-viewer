@@ -1,113 +1,179 @@
 <script lang="ts">
-  import type { SpanNode } from "../../lib/traceTree.ts";
+  import type { Row } from "../../lib/traceTree.ts";
   import { formatDurationNs } from "../../lib/time.ts";
+  import { barClass } from "./barClass.ts";
   // Self-import: WaterfallRow renders itself recursively for nested
   // subtrees (replaces the deprecated <svelte:self>, per svelte-check's
   // svelte_self_deprecated guidance).
   import WaterfallRow from "./WaterfallRow.svelte";
 
   interface Props {
-    node: SpanNode;
+    /** A span, or a group of consecutive same-name siblings
+     * (`traceTree.groupSiblings`) standing in for its members' rows. */
+    row: Row;
     depth: number;
     minStartNs: number;
     totalNs: number;
+    /** span_ids whose subtree is hidden. */
     collapsed: Set<string>;
+    /** Group ids whose members are shown as rows of their own. */
+    expandedGroups: Set<string>;
     selectedSpanId: string | null;
+    /** parent span_id -> rows under it, precomputed for the whole trace
+     * (`traceTree.buildRows`) so grouping is decided once, not per row. */
+    rowsByParent: Map<string, Row[]>;
     onToggle: (spanId: string) => void;
+    onToggleGroup: (groupId: string) => void;
     onSelect: (spanId: string) => void;
   }
 
   let {
-    node,
+    row,
     depth,
     minStartNs,
     totalNs,
     collapsed,
+    expandedGroups,
     selectedSpanId,
+    rowsByParent,
     onToggle,
+    onToggleGroup,
     onSelect,
   }: Props = $props();
 
-  const span = $derived(node.span);
-  const hasChildren = $derived(node.children.length > 0);
-  const isCollapsed = $derived(collapsed.has(span.span_id));
-  const isSelected = $derived(selectedSpanId === span.span_id);
+  const group = $derived(row.kind === "group" ? row : null);
+  const node = $derived(row.kind === "span" ? row.node : null);
+  const span = $derived(node ? node.span : group!.members[0]!.span);
+
+  const childRows = $derived(
+    node && node.children.length > 0
+      ? (rowsByParent.get(node.span.span_id) ?? [])
+      : [],
+  );
+  const hasChildren = $derived(childRows.length > 0);
+  const isCollapsed = $derived(node !== null && collapsed.has(span.span_id));
+  const isExpanded = $derived(group !== null && expandedGroups.has(group.id));
+  const isSelected = $derived(node !== null && selectedSpanId === span.span_id);
 
   // Bar position/size as a percentage of [minStartNs, minStartNs + totalNs]
-  // -- the whole trace's time range. Guard totalNs === 0
-  // (a trace with a single zero-duration span) to avoid a divide-by-zero
-  // producing NaN%.
+  // -- the whole trace's time range. A group's bar covers the union of
+  // its members. Guard totalNs === 0 (a trace with a single zero-duration
+  // span) to avoid a divide-by-zero producing NaN%.
+  const startNs = $derived(group ? group.startNs : span.start_ns);
+  const endNs = $derived(group ? group.endNs : span.end_ns);
   const leftPct = $derived(
-    totalNs > 0 ? ((span.start_ns - minStartNs) / totalNs) * 100 : 0,
+    totalNs > 0 ? ((startNs - minStartNs) / totalNs) * 100 : 0,
   );
   const widthPct = $derived(
-    totalNs > 0
-      ? Math.max(((span.end_ns - span.start_ns) / totalNs) * 100, 0.2)
-      : 100,
+    totalNs > 0 ? Math.max(((endNs - startNs) / totalNs) * 100, 0.2) : 100,
   );
-  const durationNs = $derived(span.end_ns - span.start_ns);
+  /** A span's own duration; a group's summed work, which is what "how
+   * much did these queries cost" means. */
+  const durationNs = $derived(
+    group ? group.sumDurationNs : span.end_ns - span.start_ns,
+  );
 
-  /** Color by span family: the root of the tree, `db.query`, `db.write.*`,
-   * else "other" -- a small fixed palette. ERROR
-   * status overrides to red regardless of family. */
-  function barClass(): string {
-    if (span.status === "ERROR") return "bar bar-error";
-    if (depth === 0) return "bar bar-root";
-    if (span.name === "db.query") return "bar bar-db-query";
-    if (span.name.startsWith("db.write.")) return "bar bar-db-write";
-    return "bar bar-other";
+  function activate() {
+    if (group) {
+      onToggleGroup(group.id);
+    } else {
+      onSelect(span.span_id);
+    }
   }
 </script>
 
-<div class="row" class:row-selected={isSelected} id={`span-${span.span_id}`}>
+<div
+  class="row"
+  class:row-selected={isSelected}
+  class:row-group={group !== null}
+  id={group ? group.id : `span-${span.span_id}`}
+>
   <div
     class="row-main"
     role="button"
     tabindex="0"
-    onclick={() => onSelect(span.span_id)}
+    aria-expanded={group ? isExpanded : undefined}
+    onclick={activate}
     onkeydown={(e) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        onSelect(span.span_id);
+        activate();
       }
     }}
   >
     <span class="name-cell" style={`padding-left: ${depth * 1.25}rem`}>
-      {#if hasChildren}
-        <button
-          type="button"
-          class="toggle"
-          aria-label={isCollapsed ? "Expand subtree" : "Collapse subtree"}
-          onclick={(e) => {
-            e.stopPropagation();
-            onToggle(span.span_id);
-          }}
+      {#if group}
+        <span class="toggle" aria-hidden="true">{isExpanded ? "▼" : "▶"}</span>
+        <span class="span-name" title={group.name}>{group.name}</span>
+        <span
+          class="group-count"
+          title={`${group.members.length} consecutive ${group.name} spans` +
+            (group.spanCount > group.members.length
+              ? ` (${group.spanCount} including their children)`
+              : "")}>&times;{group.members.length}</span
         >
-          {isCollapsed ? "▶" : "▼"}
-        </button>
       {:else}
-        <span class="toggle-spacer"></span>
+        {#if hasChildren}
+          <button
+            type="button"
+            class="toggle"
+            aria-label={isCollapsed ? "Expand subtree" : "Collapse subtree"}
+            onclick={(e) => {
+              e.stopPropagation();
+              onToggle(span.span_id);
+            }}
+          >
+            {isCollapsed ? "▶" : "▼"}
+          </button>
+        {:else}
+          <span class="toggle-spacer"></span>
+        {/if}
+        <span class="span-name" title={span.name}>{span.name}</span>
       {/if}
-      <span class="span-name" title={span.name}>{span.name}</span>
     </span>
-    <span class="duration-label">{formatDurationNs(durationNs)}</span>
+    <span
+      class="duration-label"
+      title={group ? "Total across the grouped spans" : undefined}
+      >{formatDurationNs(durationNs)}</span
+    >
     <span class="bar-track">
-      <span class={barClass()} style={`left: ${leftPct}%; width: ${widthPct}%`}
+      <span
+        class={barClass(span, depth)}
+        style={`left: ${leftPct}%; width: ${widthPct}%`}
       ></span>
     </span>
   </div>
 </div>
 
-{#if hasChildren && !isCollapsed}
-  {#each node.children as child (child.span.span_id)}
+{#if group && isExpanded}
+  {#each group.members as member (member.span.span_id)}
     <WaterfallRow
-      node={child}
+      row={{ kind: "span", node: member }}
+      {depth}
+      {minStartNs}
+      {totalNs}
+      {collapsed}
+      {expandedGroups}
+      {selectedSpanId}
+      {rowsByParent}
+      {onToggle}
+      {onToggleGroup}
+      {onSelect}
+    />
+  {/each}
+{:else if hasChildren && !isCollapsed}
+  {#each childRows as child (child.kind === "group" ? child.id : child.node.span.span_id)}
+    <WaterfallRow
+      row={child}
       depth={depth + 1}
       {minStartNs}
       {totalNs}
       {collapsed}
+      {expandedGroups}
       {selectedSpanId}
+      {rowsByParent}
       {onToggle}
+      {onToggleGroup}
       {onSelect}
     />
   {/each}
@@ -115,7 +181,7 @@
 
 <style>
   .row {
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid #f0f0f0;
   }
   .row-selected {
     background: #eef4ff;
@@ -124,7 +190,7 @@
     display: flex;
     align-items: center;
     width: 100%;
-    padding: 0.35rem 0.6rem;
+    padding: 0.15rem 0.6rem;
     background: none;
     border: none;
     cursor: pointer;
@@ -136,6 +202,12 @@
   }
   .row-selected .row-main:hover {
     background: #e4edfe;
+  }
+  .row-group .row-main {
+    background: #fafbfc;
+  }
+  .row-group .row-main:hover {
+    background: #f1f4f7;
   }
   .name-cell {
     display: flex;
@@ -168,18 +240,31 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .group-count {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    line-height: 1;
+    padding: 0.12rem 0.35rem;
+    border-radius: 0.6rem;
+    background: #e5e7eb;
+    color: #374151;
+    font-variant-numeric: tabular-nums;
+  }
   .bar-track {
     position: relative;
     flex: 1;
-    height: 1.1rem;
+    height: 1rem;
     display: flex;
     align-items: center;
   }
   .bar {
     position: absolute;
-    height: 0.7rem;
+    height: 0.65rem;
     border-radius: 2px;
     min-width: 2px;
+  }
+  .row-group .bar {
+    opacity: 0.55;
   }
   .bar-root {
     background: #6b7280;

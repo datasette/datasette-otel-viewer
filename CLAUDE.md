@@ -203,6 +203,18 @@ the real `Annotated[..., Body()]` objects at decoration time.
   nothing here enumerates Datasette's or a plugin's span names. `_where()`
   builds the filter for both the list and the facet; keep the HTTP test
   (`url.path` on the root span) in step with `http_label`.
+- The trace waterfall folds runs of consecutive siblings with the same name
+  and `scope_name` into one group row (`traceTree.groupSiblings`, rows for
+  the whole trace precomputed by `buildRows`): at least `GROUP_MIN_RUN`
+  siblings, none an ERROR, none longer than `GROUP_MAX_FRACTION` of the
+  trace -- proportional so a 15s agent trace folds every query away and a
+  30ms request keeps its 1ms ones. Only *consecutive* siblings fold, so
+  the order of work survives (Sentry's autogrouping, adapted: members may
+  have children, since every `db.query` does). Groups start closed; the
+  header toggle disables grouping, and `reveal()` opens the group around a
+  `#span-` deep link the same way it expands collapsed ancestors. The
+  "Slowest" strip ranks by `selfTimeNs` (duration minus children), not
+  duration, or every wrapper around the slow call would fill it.
 - `metrics_math.py` and `frontend/src/lib/metricsMath.ts` must stay in sync;
   both test files assert the same vectors.
 - The metrics planning package (research, decision log, tickets) is in
