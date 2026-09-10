@@ -942,16 +942,40 @@ async def span_list(datasette, query: SpanListQuery) -> SpanListResponse:
     where, params = _span_list_where(query)
     source = _SPAN_GROUPS_SQL.format(where=where)
     params = [query.split_by] + params
+    order = _span_order_clause(query)
     total = (
         await db.execute(f"select count(*) from ({source})", params)
     ).single_value()
+    if query.highlight and query.next is None:
+        # Arriving with a span to pin and no cursor of your own: open on the
+        # page that holds it. Its rank is one window over the matching spans
+        # -- the same set the page query sorts anyway -- and the answer is
+        # written back onto `next`, so paging, the URL and the Previous
+        # button all see an ordinary offset from here on.
+        # .first(), not .single_value(): a pin that matches nothing (filters
+        # changed under it, or the span aged out) returns no row at all.
+        found = (
+            await db.execute(
+                f"""
+                with matching as ({source}),
+                ranked as (
+                  select span_id, row_number() over (order by {order}) as rn
+                  from matching
+                )
+                select rn from ranked where span_id = ?
+                """,
+                params + [query.highlight],
+            )
+        ).first()
+        if found is not None:
+            query.next = str((found["rn"] - 1) // query.size * query.size)
     result = await db.execute(
         f"""
         with matching as ({source})
         select m.*, t.name as trace_root_name
         from matching m
         left join traces t on t.trace_id = m.trace_id
-        order by {_span_order_clause(query)} limit ? offset ?
+        order by {order} limit ? offset ?
         """,
         # One row past the page, as in list_traces: its presence is the
         # "is there a next page?" test.

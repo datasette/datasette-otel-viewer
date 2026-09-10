@@ -267,6 +267,7 @@ async def spans_list_page(datasette, request):
             name_exact=args.get("name_exact") or None,
             split_value=args.get("split_value"),
             statement=args.get("statement") or None,
+            highlight=args.get("highlight") or None,
             size=args.get("_size") or DEFAULT_SIZE,
             sort=args.get("_sort") or None,
             sort_desc=args.get("_sort_desc") or None,

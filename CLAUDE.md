@@ -173,6 +173,14 @@ the real `Annotated[..., Body()]` objects at decoration time.
   `page_data.SpanFilters`. A summary row is a *group*, so opening one drills
   into `span_list()` (the spans behind it, paged like the trace list), never
   into a single span -- the slowest-span jump stays on the Max cell.
+- `SpanListQuery.highlight` is one span_id to pin: the trace inspector's "All
+  spans like this" link into `span_list()`. With no cursor of its own,
+  `span_list()` ranks that span with one window over the matching spans under
+  the query's own ordering and writes the page offset back onto `query.next`,
+  so the frontend, the URL and Previous all see an ordinary offset. An
+  explicit `_next` wins, which is what stops paging away from the pinned page
+  snapping back to it; SpansListPage marks the row and says so on the chip
+  when the pin is not on the page in front of you.
 - The traces list's `?root=` filter buckets traces by root span --
   `queries.root_kinds` derives the buckets from the store (HTTP roots
   collapsed, everything else by span name and instrumentation scope), so

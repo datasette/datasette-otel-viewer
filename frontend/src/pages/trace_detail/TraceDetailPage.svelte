@@ -101,6 +101,18 @@
     }
   }
 
+  /** The span catalogue, narrowed to this kind of work: same name, same
+   * instrumentation scope (which is what /-/otel/spans keys a row on), with
+   * this span pinned so the list opens on its page and marks its row. One
+   * span in one trace tells you nothing about whether 40ms is normal; this
+   * is the jump from "this span" to "every span like it". */
+  function spanListUrl(span: TraceDetailPageData["spans"][number]): string {
+    const params = new URLSearchParams({ name_exact: span.name });
+    if (span.scope_name) params.set("scope", span.scope_name);
+    params.set("highlight", span.span_id);
+    return `/-/otel/spans/list?${params}`;
+  }
+
   function attributeEntries(obj: Record<string, unknown>): [string, string][] {
     return Object.entries(obj).map(([k, v]) => [
       k,
@@ -178,6 +190,15 @@
             <h2 title={s.name}>{s.name}</h2>
             <button type="button" class="close-btn" onclick={closeInspector}
               >&times;</button
+            >
+          </div>
+
+          <div class="inspector-actions">
+            <a
+              class="action"
+              href={spanListUrl(s)}
+              title="Every span with this name and scope, this one highlighted"
+              >All spans like this &rarr;</a
             >
           </div>
 
@@ -327,6 +348,24 @@
     border: 1px solid #e2e2e2;
     border-radius: 4px;
     overflow: hidden;
+  }
+  .inspector-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 0.5rem 0 0.75rem;
+  }
+  .inspector-actions .action {
+    display: inline-block;
+    font-size: 0.8rem;
+    padding: 0.2rem 0.5rem;
+    border: 1px solid #d7dee6;
+    border-radius: 0.25rem;
+    background: #f6f8fa;
+    text-decoration: none;
+  }
+  .inspector-actions .action:hover {
+    background: #eef2f6;
   }
   .inspector {
     width: 380px;

@@ -222,6 +222,15 @@ you can drop one at a time; each span links into its own waterfall, and says
 which trace it sits inside. The Max cell on the catalogue still jumps
 straight to the slowest single span.
 
+The waterfall goes the other way too: **All spans like this** in a selected
+span's inspector opens that same list for its name and scope, with the span
+itself pinned (`?highlight=<span_id>`). One span in one trace can't tell you
+whether 21ms is normal; the list opens on the page holding it — the rank is
+computed under whatever ordering is in force — scrolls to it and marks the
+row, so it sits among its peers. Sorting keeps the pin in view; paging away
+from it, or dropping a filter it depended on, leaves the chip saying "not on
+this page", and the chip drops the pin.
+
 The other summary pages are this one zoomed in on a particular kind of work:
 `/-/otel/http` on the request roots, `/-/otel/sql` on the `db.query` spans
 broken down by statement rather than by name — and a row there opens the same

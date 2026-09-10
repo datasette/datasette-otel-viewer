@@ -315,17 +315,70 @@ async def test_split_value_and_statement_pin_a_row(make_ds):
 
 
 @pytest.mark.asyncio
+async def test_highlight_opens_the_page_holding_that_span(make_ds):
+    """A span in the trace waterfall links here to see its own kind of work in
+    context, so the list has to *land* on it: with a span pinned and no cursor
+    of its own, the server pages to wherever the ordering puts it."""
+    ds = await make_ds(public_viewer=True)
+    await store.insert_spans(
+        ds,
+        [
+            span_row(n, name="db.query", kind="CLIENT", duration_ms=float(n))
+            for n in range(1, 13)
+        ],
+    )
+    # Slowest first, so span 2 (2.0ms) is 11th of 12: page 3 at size 5.
+    pinned = await listed_spans(
+        ds, name_exact="db.query", size=5, highlight=f"{2:016x}"
+    )
+    assert pinned["query"]["next"] == "10"
+    assert [s["duration_ms"] for s in pinned["spans"]] == [2.0, 1.0]
+    assert pinned["spans"][0]["span_id"] == f"{2:016x}"
+
+    # The sort is still yours: pinned under the oldest-first order it is 2nd.
+    oldest = await listed_spans(
+        ds, name_exact="db.query", size=5, sort="start_ns", highlight=f"{2:016x}"
+    )
+    assert oldest["query"]["next"] == "0"
+    assert oldest["spans"][0]["duration_ms"] == 1.0
+
+    # An explicit cursor wins: paging on from the pinned page must not snap
+    # back to it, and the pin stays on the query for the row marking.
+    paged = await listed_spans(
+        ds, name_exact="db.query", size=5, highlight=f"{2:016x}", next="0"
+    )
+    assert [s["duration_ms"] for s in paged["spans"]] == [12.0, 11.0, 10.0, 9.0, 8.0]
+    assert paged["query"]["highlight"] == f"{2:016x}"
+
+    # A span that no longer matches the filters is simply not found: the list
+    # answers from row one and the frontend says the pin is not on this page.
+    missing = await listed_spans(ds, name_exact="db.query", highlight=f"{999:016x}")
+    assert missing["query"]["next"] is None
+    assert missing["total"] == 12
+
+    bad = await ds.client.post(
+        "/-/otel/api/spans/list", json={"highlight": "../../etc"}
+    )
+    assert bad.status_code == 400
+    assert "highlight is not a span id" in bad.json()["error"]
+
+
+@pytest.mark.asyncio
 async def test_span_list_page_renders_and_is_gated(make_ds):
     ds = await make_ds(public_viewer=True)
     await store.insert_spans(ds, cron_trace(3, task="backup", duration_ms=5.0))
     response = await ds.client.get(
         "/-/otel/spans/list?name_exact=datasette_cron.run&scope=datasette_cron"
+        f"&highlight={3:016x}"
     )
     assert response.status_code == 200
     assert "src/pages/spans_list/index.ts" in response.text
     data = page_data(response.text)
     assert data["total"] == 1
     assert data["query"]["name_exact"] == "datasette_cron.run"
+    # The pin arrives from the trace waterfall in the URL and rides the page
+    # data through to the row marking.
+    assert data["query"]["highlight"] == f"{3:016x}"
     assert data["database"] == "otel"
     # The page names the row it opened, in the title and the crumbs.
     assert "<title>datasette_cron.run</title>" in response.text

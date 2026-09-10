@@ -49,6 +49,27 @@
     offset - size > 0 ? String(offset - size) : null,
   );
 
+  /** The span the trace view sent us to, if it is on the page in front of
+   * us. The server opens the list on the page holding it, so normally it is
+   * -- but paging on from there, or dropping a filter, can leave it behind,
+   * and a pin that quietly points at nothing is worse than one that says so. */
+  const highlightShown = $derived(
+    query.highlight != null &&
+      spans.some((row) => row.span_id === query.highlight),
+  );
+
+  // Bring the pinned row into view whenever it lands on the page: it can be
+  // row 80 of 100, and a highlight below the fold is not a highlight.
+  $effect(() => {
+    if (!highlightShown) return;
+    const id = query.highlight;
+    requestAnimationFrame(() => {
+      document
+        .getElementById(`span-row-${id}`)
+        ?.scrollIntoView({ block: "center" });
+    });
+  });
+
   /** What this list is showing, as removable chips: the catalogue row that
    * was opened, plus any filter it was carrying at the time. */
   const filterChips = $derived(
@@ -75,6 +96,13 @@
             `Slower than ${query.min_duration_ms} ms`,
         ],
         ["service", query.service && `Service ${query.service}`],
+        [
+          "highlight",
+          query.highlight &&
+            (highlightShown
+              ? "Span you came from"
+              : "Span you came from (not on this page)"),
+        ],
       ] as [keyof SpanListQuery, string | false | null | undefined][]
     )
       .filter(([, label]) => Boolean(label))
@@ -221,7 +249,9 @@
     <tbody>
       {#each spans as row (row.span_id)}
         <tr
+          id={`span-row-${row.span_id}`}
           class="row-link"
+          class:highlighted={row.span_id === query.highlight}
           onclick={() => (window.location.href = spanUrl(row))}
         >
           <td class="span-name">
@@ -397,6 +427,15 @@
   }
   tbody tr.row-link:hover {
     background: #f6f8fa;
+  }
+  tbody tr.highlighted > td {
+    background: #fff8e1;
+  }
+  tbody tr.highlighted > td:first-child {
+    box-shadow: inset 3px 0 0 #e0a800;
+  }
+  tbody tr.highlighted:hover > td {
+    background: #fdf1cd;
   }
   td.empty {
     text-align: center;

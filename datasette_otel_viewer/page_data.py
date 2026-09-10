@@ -279,6 +279,9 @@ NESTING_NESTED = "nested"
 # the shape of an OTel attribute key (letters, digits, . _ - /) -- never a
 # quote, which is what could break out of the path.
 ATTRIBUTE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.\-/]{1,128}$")
+# A span id as the SDK writes it: hex, and short. Pattern-checked because it
+# reaches the list as a filter, and because a bad one should be a 400.
+SPAN_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{1,32}$")
 
 
 class SpanFilters(BaseModel):
@@ -388,6 +391,10 @@ class SpanListQuery(SpanFilters):
     split_value: str | None = None
     # Exact db.query.text (or datasette.callback), for /-/otel/sql's rows.
     statement: str | None = None
+    # One span_id to pin: the list opens on the page holding it (unless a
+    # cursor says otherwise) and the frontend marks the row. This is how a
+    # span in the waterfall gets to see its own kind of work in context.
+    highlight: str | None = None
 
     size: int = Field(default=DEFAULT_SIZE, ge=1, le=MAX_SIZE)
     sort: str | None = None
@@ -409,6 +416,8 @@ class SpanListQuery(SpanFilters):
             self.sort_desc = DEFAULT_SPAN_SORT_DESC
         if self.next is not None and not self.next.isdigit():
             raise ValueError("next must be a cursor from a previous response")
+        if self.highlight is not None and not SPAN_ID_PATTERN.match(self.highlight):
+            raise ValueError(f"highlight is not a span id: {self.highlight!r}")
         return self
 
     @property
