@@ -473,3 +473,33 @@ async def test_built_manifest_serves_hashed_assets(make_ds, tmp_path):
     assert response.status_code == 200
     assert "/-/static-plugins/datasette_otel_viewer/gen/" in response.text
     assert page_data(response.text)["database"] == store.db_name(ds)
+
+
+@pytest.mark.asyncio
+async def test_trace_rows_carry_the_root_span_identity(make_ds):
+    """A trace row's label is a *category* of work, so the list links it to
+    the catalogue row for that category -- which is keyed on span name plus
+    the scope that emitted it. Both have to reach the row for the link to
+    mean the same thing /-/otel/spans does."""
+    ds = await make_ds(public_viewer=True)
+    await store.insert_spans(
+        ds,
+        [
+            span_row(
+                trace_id="c" * 32,
+                span_id="c" * 16,
+                name="datasette_cron.run",
+                scope_name="datasette_cron",
+            )
+        ],
+    )
+    data = page_data((await ds.client.get("/-/otel/traces")).text)
+    row = next(t for t in data["traces"] if t["trace_id"] == "c" * 32)
+    assert (row["name"], row["scope"]) == ("datasette_cron.run", "datasette_cron")
+
+    # The spans behind that label: the same pair, as the link sends them.
+    listed = await ds.client.post(
+        "/-/otel/api/spans/list",
+        json={"name_exact": row["name"], "scope": row["scope"], "nesting": "root"},
+    )
+    assert [s["span_id"] for s in listed.json()["spans"]] == ["c" * 16]

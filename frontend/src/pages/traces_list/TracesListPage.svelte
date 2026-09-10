@@ -195,6 +195,25 @@
     window.location.href = traceUrl(traceId);
   }
 
+  /** Every span of this kind, wherever it ran: the root span's own row in
+   * the catalogue, opened. A trace row answers "what happened this time";
+   * its label is a *category* of work, and the question a category asks is
+   * how this one compares -- which is the span list, with its scatter.
+   * Keyed on name + scope, the same pair /-/otel/spans keys a row on, and
+   * restricted to roots because that is what a trace label always is. */
+  function spanListUrl(trace: TraceRow): string {
+    const params = new URLSearchParams({ nesting: "root" });
+    if (trace.name) params.set("name_exact", trace.name);
+    if (trace.scope) params.set("scope", trace.scope);
+    return `/-/otel/spans/list?${params}`;
+  }
+
+  /** Trace ids are 32 hex characters and nothing reads them whole; the head
+   * is enough to tell two rows apart, and the cell carries the full id. */
+  function shortId(traceId: string): string {
+    return traceId.slice(0, 8);
+  }
+
   /** The spans table filtered to one trace: the raw rows behind a trace,
    * one click away from facets/CSV/SQL (gated by datasette-otel-viewer). */
   function rawSpansUrl(traceId: string): string {
@@ -341,6 +360,7 @@
           onsort={handleSort}
         />
         <SortHeader key="start_ns" label="Started" {sort} onsort={handleSort} />
+        <th>Trace</th>
       </tr>
     </thead>
     <tbody>
@@ -348,8 +368,8 @@
         <tr class="row-link" onclick={() => goToTrace(trace.trace_id)}>
           <td class="root">
             <a
-              href={traceUrl(trace.trace_id)}
-              title={trace.name ?? undefined}
+              href={spanListUrl(trace)}
+              title={`Every span like ${trace.name ?? trace.label}, across traces`}
               onclick={(e) => e.stopPropagation()}>{trace.label}</a
             >
           </td>
@@ -382,10 +402,17 @@
           >
             {trace.start_ns == null ? "—" : formatRelativeTime(trace.start_ns)}
           </td>
+          <td class="mono trace-id">
+            <a
+              href={traceUrl(trace.trace_id)}
+              title={`Trace ${trace.trace_id}`}
+              onclick={(e) => e.stopPropagation()}>{shortId(trace.trace_id)}</a
+            >
+          </td>
         </tr>
       {:else}
         <tr>
-          <td colspan="7" class="empty">
+          <td colspan="8" class="empty">
             {query.root || query.service
               ? "No traces match this filter."
               : "No traces yet — make a request, then refresh."}
@@ -507,6 +534,9 @@
   td.root {
     white-space: normal;
     word-break: break-all;
+  }
+  td.trace-id {
+    white-space: nowrap;
   }
   td.num {
     text-align: right;

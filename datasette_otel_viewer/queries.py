@@ -359,6 +359,7 @@ async def list_traces(datasette, query: TracesQuery) -> TracesListResponse:
                 trace_id=r["trace_id"],
                 name=r["name"],
                 label=label,
+                scope=r["root_scope"],
                 service_name=r["service_name"],
                 span_count=r["span_count"] or 0,
                 error_count=r["error_count"] or 0,

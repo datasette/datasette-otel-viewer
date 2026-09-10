@@ -156,6 +156,14 @@ slowest trace recorded, not the slowest one on screen — and the URL is the
 state, so a sorted, filtered list is a link you can send to someone. An
 unknown sort column is a 400, like Datasette's own.
 
+A row goes two ways. The row itself — and the trace id at the end of it,
+which is there so a trace can be recognised and quoted, not just clicked —
+opens that one trace's waterfall: *what happened this time*. The root span
+label opens `/-/otel/spans/list` for that label's name and scope instead,
+because a label is a **category** of work rather than an event: the useful
+question about `datasette_cron.run` is how this run compares to every other
+one, and that is the span list, with its duration scatter on top.
+
 Gated exactly like the pages (`datasette-otel-viewer`, or `public_viewer: true`).
 
 #### HTTP endpoints

@@ -191,6 +191,12 @@ the real `Annotated[..., Body()]` objects at decoration time.
   time after the count and the page. Rowid order is insertion order, roughly
   start order, the same assumption `span_attribute_keys` samples on. The
   pinned span is unioned in so it is drawn even when the sample misses it.
+- A traces list row has two destinations: the row (and its trace id cell)
+  opens the trace, while the root span label opens `span_list()` for that
+  label's `name_exact` + `scope` + `nesting=root` -- a label names a kind of
+  work, not an event. That link is why `TraceRow.scope` exists (the root
+  span's `scope_name`, already selected as `root_scope` by `_MATCHING_SQL`):
+  without it the link would not key the same row `/-/otel/spans` does.
 - The traces list's `?root=` filter buckets traces by root span --
   `queries.root_kinds` derives the buckets from the store (HTTP roots
   collapsed, everything else by span name and instrumentation scope), so

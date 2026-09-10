@@ -62,6 +62,10 @@ class TraceRow(BaseModel):
     name: str | None = None
     # What the list shows: "<method> <url.path>" for HTTP roots, else name.
     label: str
+    # Instrumentation scope of the root span -- the other half of what the
+    # span catalogue keys a row on, so the list's label can link to every
+    # span of this kind and mean the same row /-/otel/spans would.
+    scope: str | None = None
     service_name: str | None = None
     span_count: int
     error_count: int
