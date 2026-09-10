@@ -1,6 +1,7 @@
 <script lang="ts">
   import { makeClient } from "../../api.ts";
   import Breadcrumbs from "../../components/Breadcrumbs.svelte";
+  import Icon from "../../components/Icon.svelte";
   import SortHeader from "../../components/SortHeader.svelte";
   import { nextSort, sortRows, type SortState } from "../../lib/sort.ts";
   import { formatMs, formatRelativeTime } from "../../lib/time.ts";
@@ -281,6 +282,7 @@
     {/if}
 
     <button type="button" onclick={load} disabled={loading}>
+      <Icon name="refresh" />
       {loading ? "Refreshing…" : "Refresh"}
     </button>
   </div>

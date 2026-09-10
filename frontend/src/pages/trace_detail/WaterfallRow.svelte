@@ -2,6 +2,7 @@
   import type { Row } from "../../lib/traceTree.ts";
   import { formatDurationNs } from "../../lib/time.ts";
   import { barClass } from "./barClass.ts";
+  import Icon from "../../components/Icon.svelte";
   // Self-import: WaterfallRow renders itself recursively for nested
   // subtrees (replaces the deprecated <svelte:self>, per svelte-check's
   // svelte_self_deprecated guidance).
@@ -103,7 +104,12 @@
   >
     <span class="name-cell" style={`padding-left: ${depth * 1.25}rem`}>
       {#if group}
-        <span class="toggle" aria-hidden="true">{isExpanded ? "▼" : "▶"}</span>
+        <span class="toggle"
+          ><Icon
+            name={isExpanded ? "chevronDown" : "chevronRight"}
+            size="0.7rem"
+          /></span
+        >
         <span class="span-name" title={group.name}>{group.name}</span>
         <span
           class="group-count"
@@ -123,7 +129,10 @@
               onToggle(span.span_id);
             }}
           >
-            {isCollapsed ? "▶" : "▼"}
+            <Icon
+              name={isCollapsed ? "chevronRight" : "chevronDown"}
+              size="0.7rem"
+            />
           </button>
         {:else}
           <span class="toggle-spacer"></span>
@@ -220,11 +229,13 @@
   }
   .toggle {
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: 1rem;
     background: none;
     border: none;
     cursor: pointer;
-    font-size: 0.65rem;
     color: #666;
     padding: 0;
   }

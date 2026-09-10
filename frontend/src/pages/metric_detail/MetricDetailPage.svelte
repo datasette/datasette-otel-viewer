@@ -1,5 +1,6 @@
 <script lang="ts">
   import Breadcrumbs from "../../components/Breadcrumbs.svelte";
+  import Icon from "../../components/Icon.svelte";
   import type { components } from "../../../api.d.ts";
   import { makeClient } from "../../api.ts";
   import {
@@ -219,6 +220,7 @@
     {/if}
 
     <button type="button" onclick={refresh} disabled={loading}>
+      <Icon name="refresh" />
       {loading ? "Loading…" : "Refresh"}
     </button>
   </div>

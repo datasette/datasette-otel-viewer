@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import Breadcrumbs from "../../components/Breadcrumbs.svelte";
+  import Icon from "../../components/Icon.svelte";
   import {
     formatAbsoluteTimePrecise,
     formatDurationNs,
@@ -227,6 +228,7 @@
           >{pageData.trace_id}</span
         >
         <button type="button" class="copy-btn" onclick={copyTraceId}>
+          <Icon name={copied ? "copied" : "copy"} />
           {copied ? "Copied!" : "Copy"}
         </button>
       </div>
@@ -264,7 +266,7 @@
           class="slowest"
           title="Spans ranked by self time: their duration minus the time spent in their children"
         >
-          <span class="dim">Slowest:</span>
+          <span class="dim"><Icon name="stopwatch" /> Slowest:</span>
           {#each slowest as { span: s, selfNs } (s.span_id)}
             <button
               type="button"
@@ -288,10 +290,10 @@
             >{/if}
         </label>
         <button type="button" class="tree-btn" onclick={collapseAll}
-          >Collapse all</button
+          ><Icon name="collapseAll" /> Collapse all</button
         >
         <button type="button" class="tree-btn" onclick={expandAll}
-          >Expand all</button
+          ><Icon name="expandAll" /> Expand all</button
         >
       </div>
     </div>
@@ -319,8 +321,12 @@
         <aside class="inspector">
           <div class="inspector-head">
             <h2 title={s.name}>{s.name}</h2>
-            <button type="button" class="close-btn" onclick={closeInspector}
-              >&times;</button
+            <button
+              type="button"
+              class="close-btn"
+              aria-label="Close inspector"
+              onclick={closeInspector}
+              ><Icon name="close" size="0.85em" /></button
             >
           </div>
 

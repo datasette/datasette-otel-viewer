@@ -66,7 +66,8 @@ frontend/src/
 ├── pages/metric_detail/     # SveltePlot charts (SeriesChart, HistogramHeatmap, PercentileChart)
 ├── lib/traceTree.ts         # Span forest assembly (unit-tested), time.ts, sort.ts
 ├── lib/metricsMath.ts       # TS twin of metrics_math.py (shared test vectors), metricsSeries.ts
-├── components/SortHeader.svelte, Breadcrumbs.svelte
+├── components/SortHeader.svelte, Breadcrumbs.svelte, Icon.svelte
+├── lib/icons.ts             # bootstrap-icons path data by meaning; Icon.svelte renders it
 ├── page_data/load.ts        # loadPageData<T>()
 ├── api.ts                   # openapi-fetch client over api.d.ts
 └── app.css

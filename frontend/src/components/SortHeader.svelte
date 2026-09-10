@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { SortState } from "../lib/sort.ts";
+  import Icon from "./Icon.svelte";
 
   /**
    * A clickable, sortable <th>. The owning table keeps the SortState and
@@ -29,7 +30,10 @@
 <th class:num={numeric} aria-sort={ariaSort}>
   <button type="button" onclick={() => onsort(key)}>
     {label}<span class="arrow"
-      >{active ? (sort.dir === "asc" ? "▲" : "▼") : ""}</span
+      >{#if active}<Icon
+          name={sort.dir === "asc" ? "sortAsc" : "sortDesc"}
+          size="0.75em"
+        />{/if}</span
     >
   </button>
 </th>
@@ -61,8 +65,6 @@
   .arrow {
     display: inline-block;
     width: 1em;
-    font-size: 0.7em;
-    vertical-align: middle;
     margin-left: 0.15rem;
     color: #555;
   }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { makeClient } from "../../api.ts";
   import Breadcrumbs from "../../components/Breadcrumbs.svelte";
+  import Icon from "../../components/Icon.svelte";
   import SortHeader from "../../components/SortHeader.svelte";
   import { nextSort, type SortState } from "../../lib/sort.ts";
   import { formatAbsoluteTime, formatRelativeTime } from "../../lib/time.ts";
@@ -290,6 +291,7 @@
     </label>
 
     <button type="button" onclick={load} disabled={loading}>
+      <Icon name="refresh" />
       {loading ? "Refreshing…" : "Refresh"}
     </button>
   </div>
@@ -302,7 +304,9 @@
           <button
             type="button"
             title="Remove this filter"
-            onclick={() => update({ [chip.key]: null })}>&times;</button
+            aria-label="Remove this filter"
+            onclick={() => update({ [chip.key]: null })}
+            ><Icon name="close" size="0.75em" /></button
           >
         </span>
       {/each}
@@ -431,7 +435,7 @@
         onclick={() => {
           query = { ...query, next: previousCursor };
           load();
-        }}>&larr; Previous</button
+        }}><Icon name="chevronLeft" size="0.8em" /> Previous</button
       >
       <button
         type="button"
@@ -439,7 +443,7 @@
         onclick={() => {
           query = { ...query, next: nextCursor };
           load();
-        }}>Next &rarr;</button
+        }}>Next <Icon name="chevronRight" size="0.8em" /></button
       >
     </span>
   </div>
