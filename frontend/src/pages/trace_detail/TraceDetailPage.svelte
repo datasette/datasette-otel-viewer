@@ -2,6 +2,13 @@
   import { untrack } from "svelte";
   import Breadcrumbs from "../../components/Breadcrumbs.svelte";
   import Icon from "../../components/Icon.svelte";
+  import Shortcuts from "../../components/Shortcuts.svelte";
+  import {
+    globalShortcuts,
+    navigate,
+    sectionShortcuts,
+    type ShortcutGroup,
+  } from "../../lib/shortcuts.ts";
   import {
     formatAbsoluteTimePrecise,
     formatDurationNs,
@@ -16,6 +23,8 @@
     ROOT_KEY,
     selfTimeNs,
     traceBounds,
+    visibleRows,
+    type SpanGroup,
   } from "../../lib/traceTree.ts";
   import { loadPageData } from "../../page_data/load.ts";
   import type { TraceDetailPageData } from "../../page_data/TraceDetailPageData.types.ts";
@@ -59,7 +68,24 @@
   /** Groups opened to show their members. Groups start closed: that is
    * the whole point of them. */
   let expandedGroups = $state<Set<string>>(new Set());
-  let selectedSpanId = $state<string | null>(null);
+
+  /** The row the cursor is on: a span_id or a group id. Clicking a row
+   * and the keyboard both move it. The inspector shows the cursor row
+   * while `inspectorOpen`; Escape closes the inspector and keeps the
+   * cursor, so j/k pick up where you were. */
+  let cursorId = $state<string | null>(null);
+  let inspectorOpen = $state(false);
+
+  /** The rows as drawn, top to bottom: what j/k walk. */
+  const visible = $derived(visibleRows(rowModel, collapsed, expandedGroups));
+  const groupsById = $derived(
+    new Map<string, SpanGroup>(
+      Array.from(rowModel.rowsByParent.values())
+        .flat()
+        .filter((row): row is SpanGroup => row.kind === "group")
+        .map((group) => [group.id, group]),
+    ),
+  );
 
   /** The spans where the time went, for jumping straight to them without
    * scrolling. Ranked by self time (`traceTree.selfTimeNs`), not
@@ -73,6 +99,8 @@
     .slice(0, SLOWEST_COUNT);
 
   function toggleGroup(groupId: string) {
+    cursorId = groupId;
+    inspectorOpen = true;
     const next = new Set(expandedGroups);
     if (next.has(groupId)) {
       next.delete(groupId);
@@ -97,7 +125,10 @@
   }
 
   const selectedNode = $derived(
-    selectedSpanId ? (nodesById.get(selectedSpanId) ?? null) : null,
+    inspectorOpen && cursorId ? (nodesById.get(cursorId) ?? null) : null,
+  );
+  const selectedGroup = $derived(
+    inspectorOpen && cursorId ? (groupsById.get(cursorId) ?? null) : null,
   );
 
   function toggle(spanId: string) {
@@ -111,12 +142,13 @@
   }
 
   function select(spanId: string) {
-    selectedSpanId = spanId;
+    cursorId = spanId;
+    inspectorOpen = true;
     history.replaceState(null, "", `#span-${spanId}`);
   }
 
   function closeInspector() {
-    selectedSpanId = null;
+    inspectorOpen = false;
   }
 
   /** Select a span and make sure its row is on screen: expand every
@@ -143,7 +175,8 @@
       for (const id of folded) next.add(id);
       expandedGroups = next;
     }
-    selectedSpanId = spanId;
+    cursorId = spanId;
+    inspectorOpen = true;
     requestAnimationFrame(() => {
       document
         .getElementById(`span-${spanId}`)
@@ -211,9 +244,178 @@
       typeof v === "string" ? v : JSON.stringify(v),
     ]);
   }
+
+  // ---- Keyboard ----------------------------------------------------------
+  // j/k walk `visible`; h/l fold and unfold the way a file tree's arrow
+  // keys do. The cursor is the selection, so the inspector follows it.
+  // Bindings and the ? panel come from `shortcutGroups` via Shortcuts.svelte.
+
+  function cursorIndex(): number {
+    return cursorId ? visible.findIndex((v) => v.id === cursorId) : -1;
+  }
+
+  function setCursor(id: string) {
+    cursorId = id;
+    inspectorOpen = true;
+    const isSpan = nodesById.has(id);
+    if (isSpan) history.replaceState(null, "", `#span-${id}`);
+    requestAnimationFrame(() => {
+      document
+        .getElementById(isSpan ? `span-${id}` : id)
+        ?.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  function moveCursor(delta: number) {
+    if (visible.length === 0) return;
+    const i = cursorIndex();
+    const from = i < 0 ? (delta > 0 ? -1 : visible.length) : i;
+    const next = Math.min(visible.length - 1, Math.max(0, from + delta));
+    setCursor(visible[next]!.id);
+  }
+
+  /** h: fold the cursor row; with nothing to fold, go to its parent. */
+  function cursorLeft() {
+    const i = cursorIndex();
+    if (i < 0) return moveCursor(1);
+    const v = visible[i]!;
+    if (v.row.kind === "group") {
+      if (expandedGroups.has(v.id)) return toggleGroup(v.id);
+    } else if (v.row.node.children.length > 0 && !collapsed.has(v.id)) {
+      return toggle(v.id);
+    }
+    if (v.parentId) setCursor(v.parentId);
+  }
+
+  /** l: unfold the cursor row; already open, go to its first child. */
+  function cursorRight() {
+    const i = cursorIndex();
+    if (i < 0) return moveCursor(1);
+    const v = visible[i]!;
+    if (v.row.kind === "group") {
+      if (!expandedGroups.has(v.id)) return toggleGroup(v.id);
+    } else if (v.row.node.children.length > 0 && collapsed.has(v.id)) {
+      return toggle(v.id);
+    }
+    const next = visible[i + 1];
+    if (next && next.parentId === v.id) setCursor(next.id);
+  }
+
+  /** Enter: fold or unfold, whichever the row can do. */
+  function cursorToggle() {
+    const i = cursorIndex();
+    if (i < 0) return moveCursor(1);
+    const v = visible[i]!;
+    if (v.row.kind === "group") toggleGroup(v.id);
+    else if (v.row.node.children.length > 0) toggle(v.id);
+  }
+
+  /** s / S: walk the Slowest strip from wherever the cursor is. */
+  function cycleSlowest(delta: number) {
+    if (slowest.length === 0) return;
+    const i = slowest.findIndex((e) => e.span.span_id === cursorId);
+    const next = (i + delta + slowest.length) % slowest.length;
+    jumpTo(slowest[next]!.span.span_id);
+  }
+
+  function cursorSpan() {
+    return cursorId ? (nodesById.get(cursorId)?.span ?? null) : null;
+  }
+
+  const shortcutGroups: ShortcutGroup[] = [
+    {
+      title: "Waterfall",
+      shortcuts: [
+        {
+          keys: "j",
+          also: ["ArrowDown"],
+          label: "Next row",
+          run: () => moveCursor(1),
+        },
+        {
+          keys: "k",
+          also: ["ArrowUp"],
+          label: "Previous row",
+          run: () => moveCursor(-1),
+        },
+        {
+          keys: "h",
+          also: ["ArrowLeft"],
+          label: "Fold the row, or go to its parent",
+          run: cursorLeft,
+        },
+        {
+          keys: "l",
+          also: ["ArrowRight"],
+          label: "Unfold the row, or go to its first child",
+          run: cursorRight,
+        },
+        { keys: "Enter", label: "Fold or unfold the row", run: cursorToggle },
+        {
+          keys: ["g", "g"],
+          label: "First row",
+          run: () => {
+            if (visible.length > 0) setCursor(visible[0]!.id);
+          },
+        },
+        {
+          keys: "Shift+G",
+          label: "Last row",
+          run: () => {
+            if (visible.length > 0) setCursor(visible[visible.length - 1]!.id);
+          },
+        },
+        { keys: "Shift+H", label: "Collapse all", run: collapseAll },
+        { keys: "Shift+L", label: "Expand all", run: expandAll },
+        {
+          keys: "t",
+          label: "Toggle grouping of repeated spans",
+          run: () => {
+            grouping = !grouping;
+          },
+        },
+        {
+          keys: "s",
+          label: "Next of the slowest spans",
+          run: () => cycleSlowest(1),
+        },
+        {
+          keys: "Shift+S",
+          label: "Previous of the slowest spans",
+          run: () => cycleSlowest(-1),
+        },
+        {
+          keys: "a",
+          label: "All spans like the cursor span",
+          run: () => {
+            const s = cursorSpan();
+            if (s) navigate.to(spanListUrl(s));
+          },
+        },
+        {
+          keys: "x",
+          label: "The cursor span's raw row",
+          run: () => {
+            const s = cursorSpan();
+            if (s) navigate.to(`/${pageData.database}/spans/${s.span_id}`);
+          },
+        },
+        { keys: "y", label: "Copy the trace id", run: copyTraceId },
+        { keys: "Escape", label: "Close the inspector", run: closeInspector },
+      ],
+    },
+    globalShortcuts({
+      up: { label: "Traces", href: "/-/otel/traces" },
+      filters: false,
+    }),
+    sectionShortcuts(),
+  ];
 </script>
 
-<main class="trace" class:with-inspector={selectedNode !== null}>
+<main
+  class="trace"
+  class:with-inspector={selectedNode !== null || selectedGroup !== null}
+>
   <header class="trace-header">
     <Breadcrumbs
       trail={[
@@ -271,7 +473,7 @@
             <button
               type="button"
               class="chip"
-              class:chip-selected={selectedSpanId === s.span_id}
+              class:chip-selected={cursorId === s.span_id}
               title={`${s.name}: ${formatDurationNs(selfNs)} self time of ${formatDurationNs(s.end_ns - s.start_ns)}`}
               onclick={() => jumpTo(s.span_id)}
             >
@@ -307,7 +509,7 @@
             {totalNs}
             {collapsed}
             {expandedGroups}
-            {selectedSpanId}
+            {cursorId}
             rowsByParent={rowModel.rowsByParent}
             onToggle={toggle}
             onToggleGroup={toggleGroup}
@@ -430,9 +632,48 @@
             <dd class="break-all">{s.schema_url ?? "—"}</dd>
           </dl>
         </aside>
+      {:else if selectedGroup}
+        {@const g = selectedGroup}
+        <aside class="inspector">
+          <div class="inspector-head">
+            <h2 title={g.name}>{g.name}</h2>
+            <button
+              type="button"
+              class="close-btn"
+              aria-label="Close inspector"
+              onclick={closeInspector}
+              ><Icon name="close" size="0.85em" /></button
+            >
+          </div>
+          <p class="dim group-blurb">
+            {g.members.length} consecutive spans folded into one row{g.spanCount >
+            g.members.length
+              ? `, ${g.spanCount} counting their children`
+              : ""}.
+          </p>
+          <dl class="kv">
+            <dt>Total</dt>
+            <dd>{formatDurationNs(g.sumDurationNs)}</dd>
+            <dt>Span</dt>
+            <dd>{formatDurationNs(g.endNs - g.startNs)} of wall time</dd>
+            <dt>Start</dt>
+            <dd>{formatAbsoluteTimePrecise(g.startNs)}</dd>
+            <dt>Scope</dt>
+            <dd>{g.scopeName ?? "—"}</dd>
+          </dl>
+          <div class="inspector-actions">
+            <button
+              type="button"
+              class="action"
+              onclick={() => toggleGroup(g.id)}
+              >{expandedGroups.has(g.id) ? "Fold" : "Unfold"} the group</button
+            >
+          </div>
+        </aside>
       {/if}
     </div>
   {/if}
+  <Shortcuts groups={shortcutGroups} page="Trace" />
 </main>
 
 <style>
@@ -584,6 +825,15 @@
   }
   .inspector-actions .action:hover {
     background: #eef2f6;
+  }
+  .inspector-actions button.action {
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  .group-blurb {
+    margin: 0.5rem 0 0;
+    font-size: 0.82rem;
   }
   .inspector {
     width: 380px;

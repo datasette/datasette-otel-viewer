@@ -1,6 +1,13 @@
 <script lang="ts">
   import { makeClient } from "../../api.ts";
   import Breadcrumbs from "../../components/Breadcrumbs.svelte";
+  import Shortcuts from "../../components/Shortcuts.svelte";
+  import { RowCursor } from "../../lib/rowCursor.svelte.ts";
+  import {
+    globalShortcuts,
+    sectionShortcuts,
+    tableShortcuts,
+  } from "../../lib/shortcuts.ts";
   import Icon from "../../components/Icon.svelte";
   import SortHeader from "../../components/SortHeader.svelte";
   import { nextSort, sortRows, type SortState } from "../../lib/sort.ts";
@@ -82,6 +89,23 @@
   function rawPointsUrl(name: string): string {
     return `/${initial.database}/metric_points?metric_name=${encodeURIComponent(name)}`;
   }
+
+  // Keyboard: j/k over the rows, Enter opens the metric.
+  const cursor = new RowCursor(() => sortedMetrics);
+  const shortcutGroups = [
+    tableShortcuts({
+      cursor,
+      url: (m) => detailUrl(m.name),
+      rawUrl: (m) => rawPointsUrl(m.name),
+      sortKeys: ["name", "type", "unit", "point_count", "last_seen_ns"],
+      sort: handleSort,
+    }),
+    globalShortcuts({
+      refresh,
+      up: { label: "Overview", href: "/-/otel" },
+    }),
+    sectionShortcuts("/-/otel/metrics"),
+  ];
 </script>
 
 <main class="metrics">
@@ -138,8 +162,13 @@
       </tr>
     </thead>
     <tbody>
-      {#each sortedMetrics as m (m.name)}
-        <tr class="row-link" onclick={() => goToMetric(m.name)}>
+      {#each sortedMetrics as m, i (m.name)}
+        <tr
+          class="row-link"
+          class:cursor={cursor.index === i}
+          data-cursor={cursor.index === i}
+          onclick={() => goToMetric(m.name)}
+        >
           <td class="name">
             <a
               href={detailUrl(m.name)}
@@ -183,6 +212,7 @@
     &middot;
     <a href={`/${initial.database}/metric_points`}>metric_points</a>
   </p>
+  <Shortcuts groups={shortcutGroups} page="Metrics" />
 </main>
 
 <style>

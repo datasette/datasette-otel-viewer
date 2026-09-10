@@ -1,6 +1,13 @@
 <script lang="ts">
   import { makeClient } from "../../api.ts";
   import Breadcrumbs from "../../components/Breadcrumbs.svelte";
+  import Shortcuts from "../../components/Shortcuts.svelte";
+  import { RowCursor } from "../../lib/rowCursor.svelte.ts";
+  import {
+    globalShortcuts,
+    sectionShortcuts,
+    tableShortcuts,
+  } from "../../lib/shortcuts.ts";
   import Icon from "../../components/Icon.svelte";
   import SortHeader from "../../components/SortHeader.svelte";
   import { nextSort, type SortState } from "../../lib/sort.ts";
@@ -226,6 +233,44 @@
       ? "No traces"
       : `Traces ${offset + 1}–${offset + traces.length} of ${total.toLocaleString()}`,
   );
+
+  function previousPage() {
+    if (loading || !hasPrevious) return;
+    query = { ...query, next: previousCursor };
+    load();
+  }
+  function nextPage() {
+    if (loading || nextCursor === null) return;
+    query = { ...query, next: nextCursor };
+    load();
+  }
+
+  // Keyboard: j/k over the rows, Enter opens the trace; see Shortcuts.svelte.
+  const cursor = new RowCursor(() => traces);
+  const shortcutGroups = [
+    tableShortcuts({
+      cursor,
+      url: (t) => traceUrl(t.trace_id),
+      rawUrl: (t) => rawSpansUrl(t.trace_id),
+      sortKeys: [
+        "label",
+        "service_name",
+        "http_status",
+        "span_count",
+        "error_count",
+        "duration_ms",
+        "start_ns",
+      ],
+      sort: handleSort,
+      previousPage,
+      nextPage,
+    }),
+    globalShortcuts({
+      refresh: load,
+      up: { label: "Overview", href: "/-/otel" },
+    }),
+    sectionShortcuts("/-/otel/traces"),
+  ];
 </script>
 
 <main class="traces">
@@ -368,8 +413,13 @@
       </tr>
     </thead>
     <tbody>
-      {#each traces as trace (trace.trace_id)}
-        <tr class="row-link" onclick={() => goToTrace(trace.trace_id)}>
+      {#each traces as trace, i (trace.trace_id)}
+        <tr
+          class="row-link"
+          class:cursor={cursor.index === i}
+          data-cursor={cursor.index === i}
+          onclick={() => goToTrace(trace.trace_id)}
+        >
           <td class="mono trace-id">
             <a
               href={traceUrl(trace.trace_id)}
@@ -454,6 +504,7 @@
     &middot;
     <a href={`/${initial.database}/spans`}>spans</a>
   </p>
+  <Shortcuts groups={shortcutGroups} page="Traces" />
 </main>
 
 <style>

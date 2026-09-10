@@ -1,6 +1,13 @@
 <script lang="ts">
   import { makeClient } from "../../api.ts";
   import Breadcrumbs from "../../components/Breadcrumbs.svelte";
+  import Shortcuts from "../../components/Shortcuts.svelte";
+  import { RowCursor } from "../../lib/rowCursor.svelte.ts";
+  import {
+    globalShortcuts,
+    sectionShortcuts,
+    tableShortcuts,
+  } from "../../lib/shortcuts.ts";
   import Icon from "../../components/Icon.svelte";
   import SortHeader from "../../components/SortHeader.svelte";
   import { nextSort, sortRows, type SortState } from "../../lib/sort.ts";
@@ -169,6 +176,33 @@
       : (row.span_count / row.trace_count).toFixed(
           row.span_count % row.trace_count === 0 ? 0 : 1,
         );
+
+  // Keyboard: j/k over the rows, Enter opens the group's spans.
+  const cursor = new RowCursor(() => sortedSpans);
+  const shortcutGroups = [
+    tableShortcuts({
+      cursor,
+      url: listUrl,
+      slowestUrl,
+      sortKeys: [
+        "name",
+        "scope",
+        "split_value",
+        "span_count",
+        "trace_count",
+        "error_count",
+        "total_ms",
+        "p50_ms",
+        "p95_ms",
+      ],
+      sort: handleSort,
+    }),
+    globalShortcuts({
+      refresh: load,
+      up: { label: "Overview", href: "/-/otel" },
+    }),
+    sectionShortcuts("/-/otel/spans"),
+  ];
 </script>
 
 <main class="spans">
@@ -362,8 +396,13 @@
       </tr>
     </thead>
     <tbody>
-      {#each sortedSpans as row (`${row.scope} ${row.name} ${row.split_value}`)}
-        <tr class="row-link" onclick={() => open(row)}>
+      {#each sortedSpans as row, i (`${row.scope} ${row.name} ${row.split_value}`)}
+        <tr
+          class="row-link"
+          class:cursor={cursor.index === i}
+          data-cursor={cursor.index === i}
+          onclick={() => open(row)}
+        >
           <td class="span-name">
             {#if row.kind && row.kind !== "INTERNAL"}
               <span class="tag">{row.kind}</span>
@@ -445,6 +484,7 @@
   <p class="dim raw-links">
     Raw table: <a href={`/${initial.database}/spans`}>spans</a>
   </p>
+  <Shortcuts groups={shortcutGroups} page="Spans" />
 </main>
 
 <style>

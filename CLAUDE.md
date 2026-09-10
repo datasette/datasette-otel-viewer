@@ -67,6 +67,9 @@ frontend/src/
 ├── lib/traceTree.ts         # Span forest assembly (unit-tested), time.ts, sort.ts
 ├── lib/metricsMath.ts       # TS twin of metrics_math.py (shared test vectors), metricsSeries.ts
 ├── components/SortHeader.svelte, Breadcrumbs.svelte, Icon.svelte
+├── components/Shortcuts.svelte  # Binds a page's keyboard shortcuts (TanStack Hotkeys) and draws the ? help panel
+├── lib/shortcuts.ts         # Shortcut groups: global, section jumps, table cursor (unit-tested)
+├── lib/rowCursor.svelte.ts  # The j/k row cursor the table pages share
 ├── lib/icons.ts             # bootstrap-icons path data by meaning; Icon.svelte renders it
 ├── page_data/load.ts        # loadPageData<T>()
 ├── api.ts                   # openapi-fetch client over api.d.ts
@@ -216,6 +219,21 @@ the real `Annotated[..., Body()]` objects at decoration time.
   `#span-` deep link the same way it expands collapsed ancestors. The
   "Slowest" strip ranks by `selfTimeNs` (duration minus children), not
   duration, or every wrapper around the slow call would fill it.
+- Keyboard shortcuts: every page mounts one `<Shortcuts groups page>`
+  (`components/Shortcuts.svelte`), and that `groups` list is the single
+  source for both the bindings and the `?` help panel, so a key cannot be
+  bound without being documented or vice versa. Groups come from
+  `lib/shortcuts.ts` (`globalShortcuts`, `sectionShortcuts`,
+  `tableShortcuts` over a `RowCursor`); the trace page builds its own
+  "Waterfall" group over `traceTree.visibleRows`, which must mirror what
+  `WaterfallRow` draws. Bindings go through `@tanstack/svelte-hotkeys`:
+  a shifted letter is spelled `Shift+H`, `?` is `Shift+/`, a chord is an
+  array. Escape is bound once, in `Shortcuts.svelte` (help panel, then
+  blur a field, then the page's own Escape entries); pages never bind it
+  themselves. Datasette core owns `/` for its navigation search. The
+  table pages mark the cursor row with `class:cursor` + `data-cursor`
+  (styled in `app.css`); the trace page's cursor is `cursorId`, a span or
+  group id, and the inspector follows it.
 - `metrics_math.py` and `frontend/src/lib/metricsMath.ts` must stay in sync;
   both test files assert the same vectors.
 - The metrics planning package (research, decision log, tickets) is in

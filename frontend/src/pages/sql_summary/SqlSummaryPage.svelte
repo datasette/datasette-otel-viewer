@@ -1,6 +1,13 @@
 <script lang="ts">
   import { makeClient } from "../../api.ts";
   import Breadcrumbs from "../../components/Breadcrumbs.svelte";
+  import Shortcuts from "../../components/Shortcuts.svelte";
+  import { RowCursor } from "../../lib/rowCursor.svelte.ts";
+  import {
+    globalShortcuts,
+    sectionShortcuts,
+    tableShortcuts,
+  } from "../../lib/shortcuts.ts";
   import Icon from "../../components/Icon.svelte";
   import SortHeader from "../../components/SortHeader.svelte";
   import { nextSort, sortRows, type SortState } from "../../lib/sort.ts";
@@ -150,6 +157,33 @@
   }
 
   const fmt = new Intl.NumberFormat();
+
+  // Keyboard: j/k over the rows, Enter opens the statement's spans.
+  const cursor = new RowCursor(() => sortedQueries);
+  const shortcutGroups = [
+    tableShortcuts({
+      cursor,
+      url: listUrl,
+      slowestUrl,
+      sortKeys: [
+        "query",
+        "database",
+        "run_count",
+        "error_count",
+        "total_ms",
+        "p50_ms",
+        "p95_ms",
+        "max_ms",
+        "max_rows",
+      ],
+      sort: handleSort,
+    }),
+    globalShortcuts({
+      refresh: load,
+      up: { label: "Overview", href: "/-/otel" },
+    }),
+    sectionShortcuts("/-/otel/sql"),
+  ];
 </script>
 
 <main class="sql">
@@ -325,8 +359,13 @@
       </tr>
     </thead>
     <tbody>
-      {#each sortedQueries as row (`${row.database} ${row.query}`)}
-        <tr class="row-link" onclick={() => open(row)}>
+      {#each sortedQueries as row, i (`${row.database} ${row.query}`)}
+        <tr
+          class="row-link"
+          class:cursor={cursor.index === i}
+          data-cursor={cursor.index === i}
+          onclick={() => open(row)}
+        >
           <td class="statement">
             {#if row.is_write}
               <span class="tag write" title="Ran through the write path"
@@ -405,6 +444,7 @@
   <p class="dim raw-links">
     Raw table: <a href={`/${initial.database}/spans`}>spans</a>
   </p>
+  <Shortcuts groups={shortcutGroups} page="SQL queries" />
 </main>
 
 <style>

@@ -1,6 +1,13 @@
 <script lang="ts">
   import { makeClient } from "../../api.ts";
   import Breadcrumbs from "../../components/Breadcrumbs.svelte";
+  import Shortcuts from "../../components/Shortcuts.svelte";
+  import { RowCursor } from "../../lib/rowCursor.svelte.ts";
+  import {
+    globalShortcuts,
+    sectionShortcuts,
+    tableShortcuts,
+  } from "../../lib/shortcuts.ts";
   import Icon from "../../components/Icon.svelte";
   import SortHeader from "../../components/SortHeader.svelte";
   import { nextSort, sortRows, type SortState } from "../../lib/sort.ts";
@@ -157,6 +164,30 @@
   }
 
   const fmt = new Intl.NumberFormat();
+
+  // Keyboard: j/k over the rows, Enter opens the endpoint's traces.
+  const cursor = new RowCursor(() => sortedEndpoints);
+  const shortcutGroups = [
+    tableShortcuts({
+      cursor,
+      url: tracesUrl,
+      sortKeys: [
+        "label",
+        "request_count",
+        "error_count",
+        "p50_ms",
+        "p95_ms",
+        "max_ms",
+        "last_seen_ns",
+      ],
+      sort: handleSort,
+    }),
+    globalShortcuts({
+      refresh: load,
+      up: { label: "Overview", href: "/-/otel" },
+    }),
+    sectionShortcuts("/-/otel/http"),
+  ];
 </script>
 
 <main class="http">
@@ -305,9 +336,11 @@
       </tr>
     </thead>
     <tbody>
-      {#each sortedEndpoints as endpoint (endpoint.label)}
+      {#each sortedEndpoints as endpoint, i (endpoint.label)}
         <tr
           class="row-link"
+          class:cursor={cursor.index === i}
+          data-cursor={cursor.index === i}
           onclick={() => (window.location.href = tracesUrl(endpoint))}
         >
           <td class="endpoint">
@@ -354,6 +387,7 @@
     {/if}
     · <span class="mono">ms</span>, percentiles nearest-rank
   </p>
+  <Shortcuts groups={shortcutGroups} page="HTTP endpoints" />
 </main>
 
 <style>

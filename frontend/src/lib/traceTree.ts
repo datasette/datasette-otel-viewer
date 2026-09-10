@@ -301,3 +301,50 @@ export function buildRows(nodes: SpanNode[], opts: GroupOptions): RowModel {
   place(ROOT_KEY, nodes);
   return { rowsByParent, groupOfSpan };
 }
+
+/** One row as the waterfall currently draws it. `parentId` is the row
+ * `h` moves up to: the enclosing group for a member of an open group,
+ * otherwise the parent span. */
+export interface VisibleRow {
+  row: Row;
+  /** span_id, or the group id. */
+  id: string;
+  depth: number;
+  parentId: string | null;
+}
+
+/**
+ * The rows on screen, top to bottom, given what is collapsed and which
+ * groups are open. This is the list the keyboard walks: j and k step
+ * through it, h and l consult `parentId` and the next row's depth. It
+ * mirrors WaterfallRow's rendering exactly (members of an open group sit
+ * at the group's own depth), so keep the two in step.
+ */
+export function visibleRows(
+  model: RowModel,
+  collapsed: ReadonlySet<string>,
+  expandedGroups: ReadonlySet<string>,
+): VisibleRow[] {
+  const out: VisibleRow[] = [];
+  function walkRows(rows: Row[], depth: number, parentId: string | null) {
+    for (const row of rows) {
+      if (row.kind === "group") {
+        out.push({ row, id: row.id, depth, parentId });
+        if (expandedGroups.has(row.id)) {
+          for (const member of row.members) walkSpan(member, depth, row.id);
+        }
+      } else {
+        walkSpan(row.node, depth, parentId);
+      }
+    }
+  }
+  function walkSpan(node: SpanNode, depth: number, parentId: string | null) {
+    const id = node.span.span_id;
+    out.push({ row: { kind: "span", node }, id, depth, parentId });
+    if (node.children.length > 0 && !collapsed.has(id)) {
+      walkRows(model.rowsByParent.get(id) ?? [], depth + 1, id);
+    }
+  }
+  walkRows(model.rowsByParent.get(ROOT_KEY) ?? [], 0, null);
+  return out;
+}

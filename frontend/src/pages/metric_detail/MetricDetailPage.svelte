@@ -1,5 +1,7 @@
 <script lang="ts">
   import Breadcrumbs from "../../components/Breadcrumbs.svelte";
+  import Shortcuts from "../../components/Shortcuts.svelte";
+  import { globalShortcuts, sectionShortcuts } from "../../lib/shortcuts.ts";
   import Icon from "../../components/Icon.svelte";
   import type { components } from "../../../api.d.ts";
   import { makeClient } from "../../api.ts";
@@ -153,6 +155,14 @@
   const rawPointsUrl = $derived(
     `/${page.database}/metric_points?metric_name=${encodeURIComponent(metric.name)}&_sort_desc=time_ns`,
   );
+
+  const shortcutGroups = [
+    globalShortcuts({
+      refresh,
+      up: { label: "Metrics", href: "/-/otel/metrics" },
+    }),
+    sectionShortcuts(),
+  ];
 </script>
 
 <main class="metric">
@@ -275,6 +285,7 @@
   <p class="dim raw-links">
     <a href={rawPointsUrl}>Raw points &rarr;</a>
   </p>
+  <Shortcuts groups={shortcutGroups} page="Metric" />
 </main>
 
 <style>

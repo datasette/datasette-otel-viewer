@@ -25,6 +25,7 @@
     "vitest": "^4.1.2"
   },
   "dependencies": {
+    "@tanstack/svelte-hotkeys": "^0.10.0",
     "glob": "^13.0.6",
     "json-schema-to-typescript": "^15.0.4",
     "openapi-fetch": "^0.17.0",

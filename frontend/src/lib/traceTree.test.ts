@@ -8,6 +8,7 @@ import {
   ROOT_KEY,
   selfTimeNs,
   traceBounds,
+  visibleRows,
   type Row,
   type SpanNode,
 } from "./traceTree.ts";
@@ -388,5 +389,81 @@ describe("buildRows", () => {
     expect(model.groupOfSpan.get("q-2")).toBe("group-q-0");
     expect(model.groupOfSpan.get("e-1")).toBe("group-e-0");
     expect(model.groupOfSpan.has("root")).toBe(false);
+  });
+});
+
+describe("visibleRows", () => {
+  // root
+  //   a            (has child a1)
+  //   q-0 q-1 q-2  (fold into group-q-0)
+  //   b
+  const root = makeSpan({ span_id: "root", start_ns: 0, end_ns: 10_000 });
+  const a = makeSpan({
+    span_id: "a",
+    parent_span_id: "root",
+    name: "a",
+    start_ns: 0,
+    end_ns: 100,
+  });
+  const a1 = makeSpan({
+    span_id: "a1",
+    parent_span_id: "a",
+    name: "a1",
+    start_ns: 10,
+    end_ns: 20,
+  });
+  const queries = [0, 1, 2].map((i) =>
+    makeSpan({
+      span_id: `q-${i}`,
+      parent_span_id: "root",
+      name: "db.query",
+      start_ns: 200 + i * 10,
+      end_ns: 205 + i * 10,
+    }),
+  );
+  const b = makeSpan({
+    span_id: "b",
+    parent_span_id: "root",
+    name: "b",
+    start_ns: 500,
+    end_ns: 600,
+  });
+  const model = buildRows(buildTraceTree([root, a, a1, ...queries, b]), {
+    minRun: 3,
+    maxDurationNs: 1_000,
+  });
+  const ids = (rows: ReturnType<typeof visibleRows>) =>
+    rows.map((r) => `${r.id}@${r.depth}${r.parentId ? "<" + r.parentId : ""}`);
+
+  it("lists rows in drawn order with depth and parent, groups closed", () => {
+    expect(ids(visibleRows(model, new Set(), new Set()))).toEqual([
+      "root@0",
+      "a@1<root",
+      "a1@2<a",
+      "group-q-0@1<root",
+      "b@1<root",
+    ]);
+  });
+
+  it("hides a collapsed subtree", () => {
+    expect(ids(visibleRows(model, new Set(["a"]), new Set()))).toEqual([
+      "root@0",
+      "a@1<root",
+      "group-q-0@1<root",
+      "b@1<root",
+    ]);
+  });
+
+  it("shows an open group's members at the group's depth, parented to it", () => {
+    expect(ids(visibleRows(model, new Set(), new Set(["group-q-0"])))).toEqual([
+      "root@0",
+      "a@1<root",
+      "a1@2<a",
+      "group-q-0@1<root",
+      "q-0@1<group-q-0",
+      "q-1@1<group-q-0",
+      "q-2@1<group-q-0",
+      "b@1<root",
+    ]);
   });
 });

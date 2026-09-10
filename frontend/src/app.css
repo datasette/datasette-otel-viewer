@@ -18,3 +18,12 @@
   color: #b00020;
   font-weight: 600;
 }
+/* The row the keyboard cursor is on (lib/rowCursor.svelte.ts): every
+   table page marks it the same way, so it is styled once here. */
+#app-root tr.cursor {
+  background: #eef4ff;
+  box-shadow: inset 3px 0 0 #2563eb;
+}
+#app-root tr.cursor:hover {
+  background: #e4edfe;
+}

@@ -19,7 +19,9 @@
     collapsed: Set<string>;
     /** Group ids whose members are shown as rows of their own. */
     expandedGroups: Set<string>;
-    selectedSpanId: string | null;
+    /** The cursor row, a span_id or a group id: keyboard and click both
+     * move it, and the inspector follows it. */
+    cursorId: string | null;
     /** parent span_id -> rows under it, precomputed for the whole trace
      * (`traceTree.buildRows`) so grouping is decided once, not per row. */
     rowsByParent: Map<string, Row[]>;
@@ -35,7 +37,7 @@
     totalNs,
     collapsed,
     expandedGroups,
-    selectedSpanId,
+    cursorId,
     rowsByParent,
     onToggle,
     onToggleGroup,
@@ -54,7 +56,7 @@
   const hasChildren = $derived(childRows.length > 0);
   const isCollapsed = $derived(node !== null && collapsed.has(span.span_id));
   const isExpanded = $derived(group !== null && expandedGroups.has(group.id));
-  const isSelected = $derived(node !== null && selectedSpanId === span.span_id);
+  const isSelected = $derived(cursorId === (group ? group.id : span.span_id));
 
   // Bar position/size as a percentage of [minStartNs, minStartNs + totalNs]
   // -- the whole trace's time range. A group's bar covers the union of
@@ -96,7 +98,10 @@
     aria-expanded={group ? isExpanded : undefined}
     onclick={activate}
     onkeydown={(e) => {
-      if (e.key === "Enter" || e.key === " ") {
+      // Space only: Enter is a page-level shortcut (fold/unfold the
+      // cursor row, see TraceDetailPage), and clicking a row makes it
+      // the cursor, so a focused row and the cursor row are the same.
+      if (e.key === " ") {
         e.preventDefault();
         activate();
       }
@@ -163,7 +168,7 @@
       {totalNs}
       {collapsed}
       {expandedGroups}
-      {selectedSpanId}
+      {cursorId}
       {rowsByParent}
       {onToggle}
       {onToggleGroup}
@@ -179,7 +184,7 @@
       {totalNs}
       {collapsed}
       {expandedGroups}
-      {selectedSpanId}
+      {cursorId}
       {rowsByParent}
       {onToggle}
       {onToggleGroup}

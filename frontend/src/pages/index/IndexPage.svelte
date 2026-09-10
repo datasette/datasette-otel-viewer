@@ -1,5 +1,7 @@
 <script lang="ts">
   import { loadPageData } from "../../page_data/load.ts";
+  import Shortcuts from "../../components/Shortcuts.svelte";
+  import { sectionShortcuts } from "../../lib/shortcuts.ts";
   import type { OtelIndexPageData } from "../../page_data/OtelIndexPageData.types.ts";
 
   // Landing page for /-/otel: two cards pointing at the traces and metrics
@@ -10,6 +12,8 @@
   const empty = $derived(
     data.span_count === 0 && data.metric_point_count === 0,
   );
+
+  const shortcutGroups = [sectionShortcuts("/-/otel")];
 </script>
 
 <main class="index">
@@ -81,6 +85,7 @@
     &middot;
     <a href={`/${data.database}/metric_points`}>metric_points</a>
   </p>
+  <Shortcuts groups={shortcutGroups} page="Overview" />
 </main>
 
 <style>

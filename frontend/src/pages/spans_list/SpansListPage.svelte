@@ -1,6 +1,13 @@
 <script lang="ts">
   import { makeClient } from "../../api.ts";
   import Breadcrumbs from "../../components/Breadcrumbs.svelte";
+  import Shortcuts from "../../components/Shortcuts.svelte";
+  import { RowCursor } from "../../lib/rowCursor.svelte.ts";
+  import {
+    globalShortcuts,
+    sectionShortcuts,
+    tableShortcuts,
+  } from "../../lib/shortcuts.ts";
   import Icon from "../../components/Icon.svelte";
   import DurationScatter from "./DurationScatter.svelte";
   import SortHeader from "../../components/SortHeader.svelte";
@@ -187,6 +194,35 @@
   const heading = $derived(
     query.name_exact ?? query.statement ?? "Matching spans",
   );
+
+  function previousPage() {
+    if (loading || !hasPrevious) return;
+    query = { ...query, next: previousCursor };
+    load();
+  }
+  function nextPage() {
+    if (loading || nextCursor === null) return;
+    query = { ...query, next: nextCursor };
+    load();
+  }
+
+  // Keyboard: j/k over the rows, Enter opens the span's trace.
+  const cursor = new RowCursor(() => spans);
+  const shortcutGroups = [
+    tableShortcuts({
+      cursor,
+      url: spanUrl,
+      sortKeys: ["name", "status", "duration_ms", "start_ns"],
+      sort: handleSort,
+      previousPage,
+      nextPage,
+    }),
+    globalShortcuts({
+      refresh: load,
+      up: { label: "Spans", href: "/-/otel/spans" },
+    }),
+    sectionShortcuts("/-/otel/spans"),
+  ];
 </script>
 
 <main class="span-list">
@@ -267,10 +303,12 @@
       </tr>
     </thead>
     <tbody>
-      {#each spans as row (row.span_id)}
+      {#each spans as row, i (row.span_id)}
         <tr
           id={`span-row-${row.span_id}`}
           class="row-link"
+          class:cursor={cursor.index === i}
+          data-cursor={cursor.index === i}
           class:highlighted={row.span_id === query.highlight}
           onclick={() => (window.location.href = spanUrl(row))}
         >
@@ -340,6 +378,7 @@
       >
     </span>
   </div>
+  <Shortcuts groups={shortcutGroups} page="Spans list" />
 </main>
 
 <style>
