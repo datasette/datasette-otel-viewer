@@ -335,7 +335,7 @@ on the same typed API:
 uv sync && npm install --prefix frontend
 just types          # Python → TypeScript (OpenAPI + page-data schemas)
 just frontend       # build the bundle into the package
-just test           # datasette from the otel branch via the uv source override
+just test           # pytest suite
 just dev            # self mode on :8012; pick Clark Kent in the debug bar, open /-/otel
 just demo           # self mode on :8003 (viewer public; open /-/otel)
 just shots          # regenerate docs/screenshots/*.png (used above)

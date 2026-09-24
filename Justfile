@@ -1,7 +1,3 @@
-# datasette resolves from the asg017/otel-phase1-6-plugin-kit branch of
-# simonw/datasette via [tool.uv.sources] in pyproject.toml - no released
-# datasette emits these spans yet.
-
 DEV_PORT := "5186"
 DEV_HTTP_PORT := "8012"
 
@@ -103,13 +99,9 @@ demo-db:
 # datasette-otel-viewer action. Pick Clark Kent to see /-/otel, anyone else
 # to get the 403.
 #
-# It comes from the `devserver` dependency group, NOT from `uv run --with`:
-# note that a plain `uv run` does not uninstall it afterwards, which is why
-# `test`, `demo` and the screenshot harness all pass --exact.
-# the ephemeral overlay environment --with builds resolves datasette from
-# PyPI instead of the [tool.uv.sources] git pin, and released datasette emits
-# no spans -- the dev instance then sits there recording nothing at all (same
-# version number, no warning). Switching between `just dev` and `just test`
+# It comes from the `devserver` dependency group. A plain `uv run` does not
+# uninstall it afterwards, which is why `test`, `demo` and the screenshot
+# harness all pass --exact. Switching between `just dev` and `just test`
 # re-syncs the environment; that is uv keeping the group out of the tests.
 dev *options: demo-db
     DATASETTE_SECRET=abc123 uv run --group devserver \

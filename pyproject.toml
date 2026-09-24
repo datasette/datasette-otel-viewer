@@ -10,7 +10,7 @@ classifiers=[
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "datasette>=1a37",
+    "datasette>=1.0a41",
     "datasette-plugin-router>=0.0.1a4",
     "datasette-vite>=0.0.1a4",
     "opentelemetry-sdk>=1.37",
@@ -35,11 +35,8 @@ dev = ["pytest", "pytest-asyncio", "ruff>=0.15.0"]
 # debug bar it pulls in) inject themselves into every page Datasette renders,
 # which the test suite and the doc screenshots have no business seeing. A
 # plain `uv run` leaves an already-installed group in place, so the recipes
-# that need a clean environment pass --exact. It is a group rather than a
-# `uv run --with`, though -- an ephemeral --with overlay resolves datasette
-# from PyPI, ignoring the [tool.uv.sources] git pin below, and released
-# datasette emits no OpenTelemetry spans, so the dev instance would sit there
-# recording nothing. See the `dev` recipe in the Justfile.
+# that need a clean environment pass --exact. See the `dev` recipe in the
+# Justfile.
 devserver = ["datasette-debug-gotham"]
 
 [tool.setuptools.packages.find]
@@ -52,6 +49,3 @@ datasette_otel_viewer = ["static/**/*", "templates/**/*", "manifest.json"]
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
-
-[tool.uv.sources]
-datasette = { git = "https://github.com/simonw/datasette", rev = "asg017/otel-phase1-6-plugin-kit" }

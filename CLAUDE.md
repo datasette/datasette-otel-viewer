@@ -8,7 +8,7 @@ store over HTTP. Product notes, privacy posture and config reference live in
 
 ## Architecture
 
-- **Backend:** Python, Datasette (otel branch, see `[tool.uv.sources]`),
+- **Backend:** Python, Datasette (>=1.0a41, which ships OpenTelemetry support),
   datasette-plugin-router, Pydantic, opentelemetry-sdk/proto
 - **Frontend:** Svelte 5 (runes), TypeScript, Vite, openapi-fetch, SveltePlot
   (metric charts only), served through datasette-vite
