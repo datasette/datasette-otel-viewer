@@ -28,7 +28,7 @@ store over HTTP. Product notes, privacy posture and config reference live in
 | `just types` | Regenerate `frontend/api.d.ts` + `frontend/src/page_data/*.types.ts` from Python |
 | `just types-watch` | Watch .py files, auto-regenerate types |
 | `just format` / `just format-check` | ruff (backend) + prettier (frontend) |
-| `just check` | ruff check + svelte-check/tsc |
+| `just check` | ruff check + ty check + svelte-check/tsc |
 | `just test` | pytest (page routes run in Vite dev mode, no build needed) |
 | `just test-frontend` | vitest over `frontend/src/lib/*.test.ts` |
 | `just shots` | Regenerate `docs/screenshots/*.png` via Playwright (not in CI; re-run and check `git status`) |

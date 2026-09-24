@@ -30,7 +30,7 @@ Issues = "https://github.com/datasette/datasette-otel-viewer/issues"
 otel_viewer = "datasette_otel_viewer"
 
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "ruff>=0.15.0"]
+dev = ["pytest", "pytest-asyncio", "ruff>=0.15.0", "ty>=0.0.84"]
 # `just dev` only, hence a non-default group: datasette-debug-gotham (and the
 # debug bar it pulls in) inject themselves into every page Datasette renders,
 # which the test suite and the doc screenshots have no business seeing. A
@@ -45,6 +45,14 @@ exclude = ["frontend*"]
 
 [tool.setuptools.package-data]
 datasette_otel_viewer = ["static/**/*", "templates/**/*", "manifest.json"]
+
+[tool.ruff.lint]
+extend-select = ["W", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+    "E501",    # the formatter owns line length; long SQL/URL strings stay whole
+    "B905",    # zip(strict=) would change metrics_math.py behaviour vs its TS twin
+    "RUF005",  # `params + [x]` is how queries.py builds bind lists
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"

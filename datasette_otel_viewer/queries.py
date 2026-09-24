@@ -93,6 +93,7 @@ def _order_clause(query: TracesQuery) -> str:
     trace with no HTTP status shouldn't lead the ascending sort), and every
     sort ends in a total order so paging can't repeat or skip a row."""
     column = query.sort or query.sort_desc
+    assert column is not None  # the model validator defaults sort_desc
     direction = "asc" if query.sort else "desc"
     clause = f"{TRACE_ORDER_BY[column]} {direction} nulls last"
     if column != "start_ns":
@@ -906,6 +907,7 @@ assert set(SPAN_ORDER_BY) == set(SPAN_SORT_COLUMNS)
 def _span_order_clause(query: SpanListQuery) -> str:
     "``order by`` for one SpanListQuery, nulls last and always a total order."
     column = query.sort or query.sort_desc
+    assert column is not None  # the model validator defaults sort_desc
     direction = "asc" if query.sort else "desc"
     clause = f"{SPAN_ORDER_BY[column]} {direction} nulls last"
     if column != "start_ns":

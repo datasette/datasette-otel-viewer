@@ -4,7 +4,7 @@ frontend/src/lib/metricsMath.ts (same test vectors) — keep them in sync."""
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 NS = 1_000_000_000
 
@@ -36,7 +36,7 @@ def counter_increment(prev: float | None, cur: float) -> float:
     return cur - prev
 
 
-def rate(points: list[tuple[int, float]]) -> list[tuple[int, float | None]]:
+def rate(points: Sequence[tuple[int, float]]) -> list[tuple[int, float | None]]:
     """[(time_ns, cumulative_value)] sorted by time -> [(time_ns, per_second)].
     First point has no rate (None)."""
     out: list[tuple[int, float | None]] = []

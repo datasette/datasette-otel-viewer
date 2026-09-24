@@ -243,9 +243,11 @@ async def test_add_metric_reader_helper(make_ds):
     try:
         ds = await make_ds()
         await ds.client.get("/")
+        data = reader.get_metrics_data()
+        assert data is not None
         names = {
             metric.name
-            for rm in reader.get_metrics_data().resource_metrics
+            for rm in data.resource_metrics
             for sm in rm.scope_metrics
             for metric in sm.metrics
         }
@@ -326,7 +328,9 @@ async def test_export_before_arm_is_buffered(make_ds):
     provider.get_meter("test-scope").create_counter("test.buffered").add(1)
 
     exporter = selfmetrics.SelfMetricsExporter()
-    exporter.export(reader.get_metrics_data())
+    data = reader.get_metrics_data()
+    assert data is not None
+    exporter.export(data)
     assert len(exporter._pending) == 1
 
     exporter.arm(asyncio.get_running_loop(), ds)

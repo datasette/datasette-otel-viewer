@@ -117,6 +117,7 @@ class TraceFilters(BaseModel):
     @property
     def status_range(self) -> tuple[int, int]:
         "``[low, high)`` for the status filter: 500 -> (500, 501), 5xx -> (500, 600)."
+        assert self.status is not None
         if self.status.endswith("xx"):
             low = int(self.status[0]) * 100
             return low, low + 100

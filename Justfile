@@ -61,6 +61,7 @@ format-check:
 
 check-backend:
     uv run ruff check
+    uv run ty check
 
 check-frontend:
     npm run check --prefix frontend

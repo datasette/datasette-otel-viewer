@@ -25,6 +25,7 @@ import json
 import math
 import sys
 import threading
+from typing import TypeGuard
 
 from opentelemetry import metrics as otel_metrics
 from opentelemetry.metrics import NoOpMeterProvider
@@ -35,9 +36,11 @@ from opentelemetry.sdk.metrics.export import (
     ExponentialHistogram,
     Gauge,
     Histogram,
+    HistogramDataPoint,
     MetricExporter,
     MetricExportResult,
     MetricsData,
+    NumberDataPoint,
     PeriodicExportingMetricReader,
     Sum,
 )
@@ -119,7 +122,7 @@ def sdk_metrics_to_rows(
                         getattr(data_, "aggregation_temporality", None)
                     ),
                     "monotonic": (
-                        int(data_.is_monotonic) if type_name == "sum" else None
+                        int(data_.is_monotonic) if isinstance(data_, Sum) else None
                     ),
                 }
 
@@ -145,12 +148,12 @@ def sdk_metrics_to_rows(
                         "resource": resource_json,
                         "flags": None,
                     }
-                    if type_name in ("gauge", "sum"):
+                    if isinstance(p, NumberDataPoint):
                         value = p.value
                         is_int = isinstance(value, int)
                         row["value_int"] = value if is_int else None
                         row["value_double"] = None if is_int else float(value)
-                    elif type_name == "histogram":
+                    elif isinstance(p, HistogramDataPoint):
                         row.update(
                             count=p.count,
                             sum=p.sum,
@@ -269,7 +272,7 @@ class SelfMetricsExporter(MetricExporter):
 _state = {}
 
 
-def _supports_attach(provider) -> bool:
+def _supports_attach(provider) -> TypeGuard[MeterProvider]:
     "An SDK provider new enough to take another reader after construction."
     return isinstance(provider, MeterProvider) and hasattr(
         provider, "add_metric_reader"

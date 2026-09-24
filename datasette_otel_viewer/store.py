@@ -324,9 +324,7 @@ async def insert_spans(datasette, rows: list[dict]) -> int:
     db = datasette.databases[db_name(datasette)]
     with suppress():
         await db.execute_write_many(INSERT_SQL, [_row_values(r) for r in rows])
-        trace_ids = sorted(
-            {r.get("trace_id") for r in rows if r.get("trace_id") is not None}
-        )
+        trace_ids = sorted({t for r in rows if (t := r.get("trace_id")) is not None})
         if trace_ids:
             await db.execute_write_many(
                 TRACES_UPSERT_SQL, [{"trace_id": t} for t in trace_ids]

@@ -147,6 +147,7 @@ def test_merge_histograms():
     }
     h2 = {"explicit_bounds": [1, 2], "count": 6, "bucket_counts": [1, 2, 3], "sum": 0.5}
     merged = merge_histograms([h1, h2])
+    assert merged is not None
     assert merged["bucket_counts"] == [6, 7, 3]
     assert merged["count"] == 16
     assert merged["sum"] == pytest.approx(1.5)
