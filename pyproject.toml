@@ -1,6 +1,6 @@
 [project]
 name = "datasette-otel-viewer"
-version = "0.1.0a0"
+version = "0.1.0a1"
 description = "Browse the OpenTelemetry traces and metrics a Datasette instance emits, from inside that instance"
 readme = "README.md"
 authors = [{name = "Alex Garcia"}]
