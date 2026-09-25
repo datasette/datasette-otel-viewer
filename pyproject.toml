@@ -14,7 +14,7 @@ dependencies = [
     "datasette-plugin-router>=0.0.1a4",
     "datasette-vite>=0.0.1a4",
     "opentelemetry-sdk>=1.37",
-    "pydantic>=2",
+    "pydantic>=2.7",
 ]
 
 [build-system]

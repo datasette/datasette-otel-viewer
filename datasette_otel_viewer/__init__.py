@@ -13,9 +13,11 @@ Replaces datasette-otel-debugger.
 """
 
 from datasette import hookimpl
+from datasette.utils import StartupError
 from datasette_vite import vite_entry
 
 from . import selfmetrics, selfsource, store
+from .config import get_config
 from .permissions import (  # noqa: F401  (re-exported for pluggy's scan)
     permission_resources_sql,
     register_actions,
@@ -36,6 +38,7 @@ selfmetrics.install()
 @hookimpl
 def startup(datasette):
     async def inner():
+        get_config(datasette)  # fail startup on a bad config block
         await store.ensure_db(datasette)
         selfsource.configure(datasette)
         selfmetrics.configure(datasette)
@@ -58,8 +61,16 @@ def prepare_connection(conn, database, datasette):
     Negative means KiB rather than pages, so the ceiling is the same whatever
     the page size. Only this plugin's own database is touched -- the rest of
     the instance keeps Datasette's defaults.
+
+    A bad config block is left for the startup hook to report: the CLI's
+    check_databases() opens connections before it catches StartupError, so
+    raising here would print a traceback instead of the message.
     """
-    if database == store.db_name(datasette):
+    try:
+        name = store.db_name(datasette)
+    except StartupError:
+        return
+    if database == name:
         conn.execute("pragma cache_size = -32000")
 
 

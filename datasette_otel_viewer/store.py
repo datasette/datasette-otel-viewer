@@ -27,12 +27,8 @@ from typing import Any
 from datasette.database import Database
 from opentelemetry import context as otel_context
 
-PLUGIN_NAME = "datasette-otel-viewer"
-DEFAULT_DB_NAME = "otel"
-DEFAULT_DB_PATH = "otel.db"
-DEFAULT_RETENTION_HOURS = 72
-DEFAULT_MAX_SPANS = 100_000
-DEFAULT_MAX_METRIC_POINTS = 100_000
+from .config import PLUGIN_NAME, get_config
+
 PRUNE_INTERVAL_SECONDS = 60
 WRITE_INTERVAL_SECONDS = 1.0
 
@@ -303,16 +299,12 @@ delete from metrics where name not in (select distinct metric_name from metric_p
 """
 
 
-def _plugin_config(datasette) -> dict:
-    return datasette.plugin_config(PLUGIN_NAME) or {}
-
-
 def db_name(datasette) -> str:
-    return _plugin_config(datasette).get("db_name") or DEFAULT_DB_NAME
+    return get_config(datasette).db_name
 
 
 def _db_path(datasette) -> str:
-    return _plugin_config(datasette).get("db_path") or DEFAULT_DB_PATH
+    return get_config(datasette).db_path
 
 
 async def ensure_db(datasette) -> Database:
@@ -408,11 +400,10 @@ async def maybe_prune(datasette, force: bool = False) -> None:
         return
     _last_prune = now
 
-    config = _plugin_config(datasette)
-    retention_hours = float(config.get("retention_hours", DEFAULT_RETENTION_HOURS))
-    max_spans = int(config.get("max_spans", DEFAULT_MAX_SPANS))
-    max_metric_points = int(config.get("max_metric_points", DEFAULT_MAX_METRIC_POINTS))
-    cutoff_ns = int((time.time() - retention_hours * 3600) * 1e9)
+    config = get_config(datasette)
+    max_spans = config.max_spans
+    max_metric_points = config.max_metric_points
+    cutoff_ns = int((time.time() - config.retention_hours * 3600) * 1e9)
 
     db = datasette.databases[db_name(datasette)]
     with suppress():

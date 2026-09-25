@@ -47,6 +47,7 @@ from opentelemetry.sdk.trace.export import (
 from opentelemetry.sdk.trace.sampling import Decision, Sampler, SamplingResult
 
 from . import store
+from .config import get_config
 
 PENDING_LIMIT = 8192
 SCHEDULE_DELAY_MILLIS = 1000
@@ -205,8 +206,8 @@ def install():
 
 def configure(datasette):
     "Called from the startup() hook once config is readable."
-    config = datasette.plugin_config(store.PLUGIN_NAME) or {}
-    want_self = config.get("self_traces", True)
+    config = get_config(datasette)
+    want_self = config.self_traces
 
     if _state.get("mode") == "foreign":
         if want_self:
@@ -222,7 +223,7 @@ def configure(datasette):
         _state["exporter"].disable()
         return
 
-    service_name = config.get("service_name")
+    service_name = config.service_name
     if service_name:
         # Spans hold the Resource by reference; swap its (immutable)
         # attribute mapping to retrofit the name onto the queued startup

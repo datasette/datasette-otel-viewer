@@ -14,7 +14,7 @@ from datasette import Response
 from datasette.database import QueryInterrupted
 from datasette_plugin_router import Router
 
-from . import store
+from .config import get_config
 from .permissions import VIEW_ACTION_NAME
 
 router = Router(title="datasette-otel-viewer", version="0.1.0")
@@ -25,8 +25,7 @@ async def viewer_allowed(datasette, actor) -> bool:
     operator opened the viewer with ``public_viewer: true`` or the actor
     holds ``datasette-otel-viewer``. The raw tables stay gated regardless (see
     permissions.py)."""
-    config = datasette.plugin_config(store.PLUGIN_NAME) or {}
-    if config.get("public_viewer") is True:
+    if get_config(datasette).public_viewer:
         return True
     return await datasette.allowed(action=VIEW_ACTION_NAME, actor=actor)
 

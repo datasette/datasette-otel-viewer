@@ -44,6 +44,7 @@ from opentelemetry.sdk.metrics.export import (
 from opentelemetry.sdk.resources import Resource
 
 from . import selfsource, store
+from .config import get_config
 
 EXPORT_INTERVAL_MILLIS = 60_000
 # Exports (not points) held between writes.
@@ -342,8 +343,7 @@ def add_metric_reader(reader) -> bool:
 
 def configure(datasette):
     "Called from the startup() hook once config is readable."
-    config = datasette.plugin_config(store.PLUGIN_NAME) or {}
-    want_self = config.get("self_metrics", True)
+    want_self = get_config(datasette).self_metrics
 
     if _state.get("mode") == "foreign":
         if want_self:

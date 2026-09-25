@@ -107,7 +107,6 @@ from datasette import hookimpl
 from datasette.permissions import Action, PermissionSQL
 
 from . import store
-from .store import PLUGIN_NAME
 
 # Named after the plugin, like the sibling plugins' actions
 # (datasette-aforms-list, datasette-sidebar-access, ...): grant it with
@@ -148,10 +147,6 @@ READ_ACTIONS = frozenset(
 )
 
 DENY_REASON = "otel spans are private by default"
-
-
-def _plugin_config(datasette) -> dict:
-    return datasette.plugin_config(PLUGIN_NAME) or {}
 
 
 def _db_name(datasette) -> str:

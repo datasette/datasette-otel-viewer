@@ -42,6 +42,7 @@ type-checks/tests/builds the frontend in a second job.
 ```
 datasette_otel_viewer/
 ├── __init__.py              # Hooks: startup, register_routes, extra_template_vars, menu_links
+├── config.py                # OtelViewerConfig: the plugin's config block, validated (get_config)
 ├── router.py                # Shared Router + check_viewer() decorator
 ├── page_data.py             # Pydantic models: page data + API request/response
 ├── queries.py               # Read-side SQL shared by pages and API

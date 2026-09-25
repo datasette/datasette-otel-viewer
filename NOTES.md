@@ -82,6 +82,10 @@ plugins:
     service_name: datasette    # service.name for self-emitted spans and metrics
 ```
 
+The block is validated at startup (`datasette_otel_viewer/config.py`, where each
+option is documented): an unknown key or a wrong type stops Datasette with a
+message naming it.
+
 ## How self-tracing avoids tracing itself
 
 Storing a span means SQL writes through Datasette's instrumented write path —
