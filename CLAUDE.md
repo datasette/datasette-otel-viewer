@@ -121,10 +121,12 @@ the real `Annotated[..., Body()]` objects at decoration time.
   `static/gen/`, `manifest.json`. Run `just types` after touching Pydantic
   models or route signatures; `just frontend` before `just dev`.
 - `make_ds()` builds instances with `self_traces: false` unless a test passes
-  `self_traces=True`. The BatchSpanProcessor flushes on its own timer, so an
-  instance that records itself can drop spans into the store mid-test, which
-  every row count then races -- that was a ~1-in-4 suite failure. Tests that
-  want self-recorded spans opt in and `drain()`.
+  `self_traces=True`. The first request launches the store's writer tasks,
+  which then write on their own timer, so an instance that records itself can
+  drop spans into the store mid-test, which every row count then races --
+  that was a ~1-in-4 suite failure. Tests that want self-recorded spans opt
+  in and `drain()`, which calls the exporter's `flush()` directly;
+  `make_ds` shuts each instance down so those tasks end with the test.
 - Tests configure `plugins.datasette-vite.dev_paths` so page routes render
   without a build; `test_built_manifest_serves_hashed_assets` is the one test
   that needs `just frontend` first (CI does it).
@@ -142,7 +144,10 @@ the real `Annotated[..., Body()]` objects at decoration time.
   answer, not a 500. `prepare_connection` gives the otel database a 32MB page
   cache for the same reason.
 - Store writes run inside `store.suppress()` so spans about storing spans are
-  never recorded; see `selfsource.py` before touching the write path.
+  never recorded; see `selfsource.py` before touching the write path. The
+  exporters only buffer (they run on OTel's worker threads); the write
+  happens in `store.write_periodically`, one background task per exporter
+  registered from `startup` via `datasette.add_background_task`.
   `selfmetrics.py` drops metric points whose `db.namespace` is the otel
   database for the same reason.
 - The traces list sorts and pages in SQL, under Datasette's own querystring

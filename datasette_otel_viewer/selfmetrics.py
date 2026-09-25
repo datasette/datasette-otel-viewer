@@ -20,7 +20,6 @@ tracing — a _ProxyMeter's instruments forward to a provider installed later
 
 from __future__ import annotations
 
-import asyncio
 import json
 import math
 import sys
@@ -47,7 +46,7 @@ from opentelemetry.sdk.resources import Resource
 from . import selfsource, store
 
 EXPORT_INTERVAL_MILLIS = 60_000
-# Exports (not points) held while the loop is still unknown.
+# Exports (not points) held between writes.
 PENDING_LIMIT = 256
 
 # SDK data classes -> the `metrics.type` vocabulary stored in `metrics`.
@@ -187,63 +186,47 @@ def sdk_metrics_to_rows(
 
 
 class SelfMetricsExporter(MetricExporter):
-    """Buffers exports until armed; then schedules suppressed inserts onto
-    the instance's event loop. Runs on the reader's collection thread."""
+    """Buffers exports (on the reader's collection thread) for flush() to
+    write (on the event loop, from the writer task or a test's drain)."""
 
     def __init__(self):
         super().__init__()
         self._lock = threading.Lock()
-        self._armed = False
         self._disabled = False
-        self._loop = None
         self._datasette = None
         self._pending: list[MetricsData] = []
-        # Futures for scheduled inserts, so tests can drain deterministically.
-        self.futures = []
 
-    def arm(self, loop, datasette):
+    def arm(self, datasette):
         with self._lock:
-            self._loop = loop
             self._datasette = datasette
-            self._armed = True
             self._disabled = False
-            pending, self._pending = self._pending, []
-        for data in pending:
-            self._schedule(data)
 
     def disable(self):
         "self_metrics: false: drop everything, forever."
         with self._lock:
             self._disabled = True
-            self._armed = False
-            self._loop = None
             self._datasette = None
             self._pending = []
 
-    def _schedule(self, data: MetricsData):
+    async def flush(self):
         with self._lock:
-            loop, datasette = self._loop, self._datasette
-        if loop is None:
-            return
-        metrics, points = sdk_metrics_to_rows(
-            data, exclude_namespace=store.db_name(datasette)
-        )
-        if not points:
-            return
-
-        async def do_insert():
+            datasette = self._datasette
+            if datasette is None:
+                return  # not armed: keep buffering
+            pending, self._pending = self._pending, []
+        for data in pending:
+            metrics, points = sdk_metrics_to_rows(
+                data, exclude_namespace=store.db_name(datasette)
+            )
+            if not points:
+                continue
             with store.suppress():
                 await store.insert_metrics(datasette, metrics, points)
                 await store.maybe_prune(datasette)
 
-        try:
-            future = asyncio.run_coroutine_threadsafe(do_insert(), loop)
-        except RuntimeError:
-            # Startup ran on a loop that has since closed (pre-1.0a39
-            # embedder lifecycle). Dropping beats crashing the pipeline.
-            return
-        self.futures.append(future)
-        del self.futures[:-64]
+    async def run(self, datasette):
+        "The background task configure() registers."
+        await store.write_periodically(self.flush)
 
     def export(
         self, metrics_data: MetricsData, timeout_millis: float = 10_000, **kwargs
@@ -251,11 +234,8 @@ class SelfMetricsExporter(MetricExporter):
         with self._lock:
             if self._disabled:
                 return MetricExportResult.SUCCESS
-            if not self._armed:
-                if len(self._pending) < PENDING_LIMIT:
-                    self._pending.append(metrics_data)
-                return MetricExportResult.SUCCESS
-        self._schedule(metrics_data)
+            if len(self._pending) < PENDING_LIMIT:
+                self._pending.append(metrics_data)
         return MetricExportResult.SUCCESS
 
     def force_flush(self, timeout_millis: float = 10_000):
@@ -360,7 +340,7 @@ def add_metric_reader(reader) -> bool:
     return True
 
 
-def configure(datasette, loop):
+def configure(datasette):
     "Called from the startup() hook once config is readable."
     config = datasette.plugin_config(store.PLUGIN_NAME) or {}
     want_self = config.get("self_metrics", True)
@@ -377,4 +357,7 @@ def configure(datasette, loop):
         _state["exporter"].disable()
         return
 
-    _state["exporter"].arm(loop, datasette)
+    _state["exporter"].arm(datasette)
+    datasette.add_background_task(
+        _state["exporter"].run, name=f"{store.PLUGIN_NAME}: metrics"
+    )

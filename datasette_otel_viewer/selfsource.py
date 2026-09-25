@@ -19,17 +19,18 @@ owns the provider's sampler, which is the one hard rule here:
   stderr line at startup). Storing our own spans without the suppressing
   sampler is the measured runaway (~10-14k spans/s); never attach-and-store.
 
-The exporter buffers span rows until the startup hook arms it with the event
-loop and the Datasette instance. It leans on the 1.0a39 lifecycle guarantee
-that ``datasette serve`` runs startup and the server on a single event loop:
-the loop captured at startup is the loop ``run_coroutine_threadsafe`` later
-targets from the BatchSpanProcessor's worker thread. On older lifecycles the
-scheduled insert fails with "Event loop is closed" - dropped, never raised.
+The exporter only buffers span rows; it runs on the BatchSpanProcessor's
+worker thread and never touches the event loop. The startup hook arms it with
+the Datasette instance and registers a writer task through
+``datasette.add_background_task``, which Datasette launches once every
+startup hook has run, keeps alive, and cancels at shutdown (the writer
+flushes once more on the way out). Nothing is written until that task runs,
+so an embedder that calls ``invoke_startup()`` without serving needs
+``start_background_tasks()`` too.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import sys
 import threading
@@ -123,71 +124,54 @@ def span_to_row(span) -> dict:
 
 
 class SelfStoreExporter(SpanExporter):
-    """Buffers rows until armed; then schedules suppressed inserts onto the
-    instance's event loop. Runs on the BatchSpanProcessor worker thread."""
+    """Buffers rows (on the BatchSpanProcessor worker thread) for flush() to
+    write (on the event loop, from the writer task or a test's drain())."""
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._armed = False
         self._disabled = False
-        self._loop = None
         self._datasette = None
         self._pending = []
-        # Futures for scheduled inserts, so tests can drain deterministically.
-        self.futures = []
 
-    def arm(self, loop, datasette):
+    def arm(self, datasette):
         with self._lock:
-            self._loop = loop
             self._datasette = datasette
-            self._armed = True
             self._disabled = False
-            pending, self._pending = self._pending, []
-        if pending:
-            self._schedule(pending)
 
     def disable(self):
         "self_traces: false, or foreign provider: drop everything, forever."
         with self._lock:
             self._disabled = True
-            self._armed = False
-            self._loop = None
             self._datasette = None
             self._pending = []
 
-    def _schedule(self, rows):
+    async def flush(self):
         with self._lock:
-            loop, datasette = self._loop, self._datasette
-        if loop is None:
+            datasette = self._datasette
+            if datasette is None:
+                return  # not armed: keep buffering
+            rows, self._pending = self._pending, []
+        if not rows:
             return
+        # suppress() around the writes; Datasette's default block=True
+        # write APIs carry this context to the write thread, which is
+        # what lets the sampler drop the insert's own spans.
+        with store.suppress():
+            await store.insert_spans(datasette, rows)
+            await store.maybe_prune(datasette)
 
-        async def do_insert():
-            # suppress() around the writes; Datasette's default block=True
-            # write APIs carry this context to the write thread, which is
-            # what lets the sampler drop the insert's own spans.
-            with store.suppress():
-                await store.insert_spans(datasette, rows)
-                await store.maybe_prune(datasette)
-
-        try:
-            future = asyncio.run_coroutine_threadsafe(do_insert(), loop)
-        except RuntimeError:
-            # Startup ran on a loop that has since closed (pre-1.0a39
-            # embedder lifecycle). Dropping beats crashing the pipeline.
-            return
-        self.futures.append(future)
-        del self.futures[:-64]
+    async def run(self, datasette):
+        "The background task configure() registers."
+        await store.write_periodically(self.flush)
 
     def export(self, spans):
         rows = [span_to_row(s) for s in spans]
         with self._lock:
             if self._disabled:
                 return SpanExportResult.SUCCESS
-            if not self._armed:
-                if len(self._pending) + len(rows) <= PENDING_LIMIT:
-                    self._pending.extend(rows)
-                return SpanExportResult.SUCCESS
-        self._schedule(rows)
+            # Held from import until the first write, then between writes.
+            if len(self._pending) + len(rows) <= PENDING_LIMIT:
+                self._pending.extend(rows)
         return SpanExportResult.SUCCESS
 
     def shutdown(self):
@@ -219,7 +203,7 @@ def install():
     _state.update(mode="owner", provider=provider, exporter=exporter, resource=resource)
 
 
-def configure(datasette, loop):
+def configure(datasette):
     "Called from the startup() hook once config is readable."
     config = datasette.plugin_config(store.PLUGIN_NAME) or {}
     want_self = config.get("self_traces", True)
@@ -251,4 +235,7 @@ def configure(datasette, loop):
             attributes=attributes, immutable=True
         )
 
-    _state["exporter"].arm(loop, datasette)
+    _state["exporter"].arm(datasette)
+    datasette.add_background_task(
+        _state["exporter"].run, name=f"{store.PLUGIN_NAME}: spans"
+    )

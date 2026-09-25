@@ -18,7 +18,9 @@ in demos/otel/self_storage/README.md — the one workaround that holds).
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import logging
 import time
 from typing import Any
 
@@ -32,6 +34,9 @@ DEFAULT_RETENTION_HOURS = 72
 DEFAULT_MAX_SPANS = 100_000
 DEFAULT_MAX_METRIC_POINTS = 100_000
 PRUNE_INTERVAL_SECONDS = 60
+WRITE_INTERVAL_SECONDS = 1.0
+
+logger = logging.getLogger(PLUGIN_NAME)
 
 SUPPRESS_KEY = otel_context.create_key("datasette_otel_viewer.suppress")
 
@@ -44,6 +49,28 @@ def suppress():
         yield
     finally:
         otel_context.detach(token)
+
+
+async def write_periodically(flush):
+    """Body of the writer task each self exporter registers with
+    ``datasette.add_background_task``: call ``flush()`` every
+    ``WRITE_INTERVAL_SECONDS``, and once more when Datasette cancels it at shutdown so rows
+    already buffered are not lost.
+
+    A failed write is logged and the loop carries on. Letting it propagate
+    would have Datasette mark the task crashed, and a single transient
+    failure (a locked database, say) would stop storage for good.
+    """
+    try:
+        while True:
+            await asyncio.sleep(WRITE_INTERVAL_SECONDS)
+            try:
+                await flush()
+            except Exception:
+                logger.exception("writing to the otel store failed")
+    except asyncio.CancelledError:
+        await flush()
+        raise
 
 
 # The row dict contract for `selfsource.span_to_row` (and for tests/seed

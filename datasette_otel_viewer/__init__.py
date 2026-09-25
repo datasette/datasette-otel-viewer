@@ -12,8 +12,6 @@ Two roles, one SQLite store (see PLAN.md):
 Replaces datasette-otel-debugger.
 """
 
-import asyncio
-
 from datasette import hookimpl
 from datasette_vite import vite_entry
 
@@ -39,9 +37,8 @@ selfmetrics.install()
 def startup(datasette):
     async def inner():
         await store.ensure_db(datasette)
-        loop = asyncio.get_running_loop()
-        selfsource.configure(datasette, loop)
-        selfmetrics.configure(datasette, loop)
+        selfsource.configure(datasette)
+        selfmetrics.configure(datasette)
 
     return inner
 

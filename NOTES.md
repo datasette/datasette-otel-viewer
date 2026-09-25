@@ -99,9 +99,10 @@ Consequences:
   itself** with a stderr notice; the viewer still works. The sibling
   exporter plugins (datasette-otel-otlp, datasette-otel-parquet) attach to this
   plugin's provider, so install order matters only to them — and they handle it.
-- Self mode relies on Datasette ≥ 1.0a39 running startup and serving on a single
-  event loop; on older embedder lifecycles inserts are dropped with a warning
-  rather than crashing.
+- Stored rows are written by a background task (`datasette.add_background_task`)
+  about once a second, and once more at shutdown. An embedder that calls
+  `invoke_startup()` without serving must also call `start_background_tasks()`,
+  or nothing is written.
 
 Self metrics (`self_metrics`) do not need that ownership. There is no runaway
 to cut — the store's own writes add one measurement to a series that already

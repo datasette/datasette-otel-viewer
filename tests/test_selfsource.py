@@ -8,7 +8,7 @@ import json
 import pytest
 from conftest import drain, raw_span_rows, reset_tracer_state
 
-from datasette_otel_viewer import selfsource
+from datasette_otel_viewer import selfsource, store
 
 
 @pytest.mark.asyncio
@@ -45,6 +45,32 @@ async def test_creation_time_attributes_are_stored(make_ds, tmp_path):
         if row[1] == "with-initial-attributes"
     ]
     assert attributes == {"at.start": "kept", "after.start": "kept too"}
+
+
+@pytest.mark.asyncio
+async def test_writer_task_stores_spans(make_ds, tmp_path, monkeypatch):
+    "Without drain(): the background task startup registered does the writing."
+    monkeypatch.setattr(store, "WRITE_INTERVAL_SECONDS", 0.01)
+    ds = await make_ds(self_traces=True)
+    await ds.client.get("/")  # first request launches background tasks
+    selfsource._state["provider"].force_flush()
+    for _ in range(100):
+        if raw_span_rows(tmp_path / "otel.db"):
+            break
+        await asyncio.sleep(0.01)
+    names = {row[1] for row in raw_span_rows(tmp_path / "otel.db")}
+    assert "datasette.startup" in names
+
+
+@pytest.mark.asyncio
+async def test_shutdown_writes_what_is_buffered(make_ds, tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "WRITE_INTERVAL_SECONDS", 3600)
+    ds = await make_ds(self_traces=True)
+    await ds.client.get("/")
+    selfsource._state["provider"].force_flush()
+    assert raw_span_rows(tmp_path / "otel.db") == []
+    await ds.invoke_shutdown()
+    assert raw_span_rows(tmp_path / "otel.db")
 
 
 @pytest.mark.asyncio

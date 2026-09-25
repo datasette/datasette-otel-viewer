@@ -318,7 +318,7 @@ def test_sdk_metrics_to_rows_matches_store_columns():
 
 
 @pytest.mark.asyncio
-async def test_export_before_arm_is_buffered(make_ds):
+async def test_export_before_arm_is_buffered(make_ds, tmp_path):
     from opentelemetry.sdk.metrics import MeterProvider
     from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
@@ -333,8 +333,14 @@ async def test_export_before_arm_is_buffered(make_ds):
     exporter.export(data)
     assert len(exporter._pending) == 1
 
-    exporter.arm(asyncio.get_running_loop(), ds)
+    await exporter.flush()  # not armed: nowhere to write yet
+    exporter.arm(ds)
+    await exporter.flush()
     assert exporter._pending == []
-    assert exporter.futures
-    for future in exporter.futures:
-        await asyncio.wrap_future(future)
+    names = {
+        row[0]
+        for row in sqlite3.connect(tmp_path / "otel.db").execute(
+            "select name from metrics"
+        )
+    }
+    assert "test.buffered" in names

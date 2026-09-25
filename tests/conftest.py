@@ -11,7 +11,6 @@ Requires the editable datasette checkout on an otel branch (run via
 `just test`).
 """
 
-import asyncio
 import json
 import re
 import sqlite3
@@ -53,7 +52,6 @@ def reset_otel():
     # Drain anything a previous test left queued into a disabled exporter.
     exporter.disable()
     _SNAPSHOT["provider"].force_flush()
-    exporter.futures.clear()
     with exporter._lock:
         exporter._pending = []
         exporter._disabled = False
@@ -71,7 +69,6 @@ def reset_otel():
 
     metrics_exporter = _METRICS_SNAPSHOT["exporter"]
     metrics_exporter.disable()
-    metrics_exporter.futures.clear()
     with metrics_exporter._lock:
         metrics_exporter._pending = []
         metrics_exporter._disabled = False
@@ -119,26 +116,26 @@ async def make_ds(tmp_path):
         return ds
 
     yield _make
+    # The first request launches the writer tasks startup registered; stop
+    # them on this test's loop rather than leave them pending when it closes.
+    for ds in made:
+        await ds.invoke_shutdown()
 
 
 async def drain(exporter=None):
-    """Push finished spans through: flush the BatchSpanProcessor, then await
-    every insert coroutine it scheduled onto this loop."""
+    """Push finished spans through: flush the BatchSpanProcessor into the
+    exporter, then write what it buffered - the writer task's job, done now."""
     exporter = exporter or selfsource._state["exporter"]
     selfsource._state["provider"].force_flush()
-    futures, exporter.futures = list(exporter.futures), []
-    for future in futures:
-        await asyncio.wrap_future(future)
+    await exporter.flush()
 
 
 async def drain_metrics():
     """Run one collection cycle - which is also what invokes the observable
-    gauge callbacks - and await the inserts it scheduled onto this loop."""
+    gauge callbacks - and write what it exported."""
     exporter = selfmetrics._state["exporter"]
     selfmetrics._state["reader"].collect()
-    futures, exporter.futures = list(exporter.futures), []
-    for future in futures:
-        await asyncio.wrap_future(future)
+    await exporter.flush()
 
 
 def page_data(html):
