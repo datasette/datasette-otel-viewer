@@ -16,3 +16,6 @@ frontend/api.d.ts
 # Generated static assets (rebuilt via `just frontend`)
 datasette_otel_viewer/static/gen/
 datasette_otel_viewer/manifest.json
+
+# Python build output (setuptools)
+build/
