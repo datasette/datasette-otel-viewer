@@ -29,8 +29,11 @@ types-watch:
 
 # === Frontend ===
 
-# Build the frontend into datasette_otel_viewer/static/gen + manifest.json
+# Build the frontend into datasette_otel_viewer/static/gen + manifest.json.
+# Vite's outDir is the package itself, so emptyOutDir is off; clear the old
+# hashed bundles here or every build piles into the wheel.
 frontend *flags:
+    rm -rf datasette_otel_viewer/static/gen datasette_otel_viewer/manifest.json
     npm run build --prefix frontend {{flags}}
 
 # Vite dev server (HMR) on port 5186

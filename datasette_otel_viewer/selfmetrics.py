@@ -28,8 +28,6 @@ import threading
 from typing import TypeGuard
 
 from opentelemetry import metrics as otel_metrics
-from opentelemetry.metrics import NoOpMeterProvider
-from opentelemetry.metrics._internal import _ProxyMeterProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import (
     AggregationTemporality,
@@ -279,6 +277,19 @@ def _supports_attach(provider) -> TypeGuard[MeterProvider]:
     )
 
 
+def _is_placeholder(provider) -> bool:
+    """Nobody has installed a real MeterProvider yet.
+
+    The API package only ships placeholders (NoOpMeterProvider and the
+    private proxy get_meter_provider() hands out before one is set), so
+    asking where the class lives avoids importing the private proxy.
+    """
+    module = type(provider).__module__
+    return module == "opentelemetry.metrics" or module.startswith(
+        "opentelemetry.metrics."
+    )
+
+
 def _new_reader():
     exporter = SelfMetricsExporter()
     reader = PeriodicExportingMetricReader(
@@ -296,7 +307,7 @@ def install():
     _state.clear()
     existing = otel_metrics.get_meter_provider()
 
-    if isinstance(existing, (_ProxyMeterProvider, NoOpMeterProvider)):
+    if _is_placeholder(existing):
         exporter, reader = _new_reader()
         # Share the tracer's Resource when we own tracing too, so the
         # service_name retrofit in selfsource.configure() reaches both signals.
